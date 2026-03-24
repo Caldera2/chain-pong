@@ -5,17 +5,18 @@ import { useGameStore } from '@/lib/store';
 import { useEffect, useMemo, useState } from 'react';
 
 export default function SplashScreen() {
-  const setScreen = useGameStore((s) => s.setScreen);
+  const { setScreen, isLoggedIn } = useGameStore();
   const [show, setShow] = useState(true);
 
   const particles = useMemo(
     () =>
-      Array.from({ length: 20 }).map((_, i) => ({
+      Array.from({ length: 25 }).map((_, i) => ({
         x: (i * 53 + 17) % 100,
         y: (i * 37 + 11) % 100,
         drift: -((i * 29 + 7) % 200),
         dur: 2 + (i % 4),
         delay: (i * 0.1) % 2,
+        color: i % 3 === 0 ? 'bg-gold/30' : i % 3 === 1 ? 'bg-mint/20' : 'bg-lavender/20',
       })),
     [],
   );
@@ -27,10 +28,10 @@ export default function SplashScreen() {
 
   useEffect(() => {
     if (!show) {
-      const t = setTimeout(() => setScreen('lobby'), 500);
+      const t = setTimeout(() => setScreen(isLoggedIn ? 'lobby' : 'login'), 500);
       return () => clearTimeout(t);
     }
-  }, [show, setScreen]);
+  }, [show, setScreen, isLoggedIn]);
 
   return (
     <motion.div
@@ -43,7 +44,7 @@ export default function SplashScreen() {
         {particles.map((p, i) => (
           <motion.div
             key={i}
-            className="absolute w-1 h-1 rounded-full bg-neon-blue/30"
+            className={`absolute w-1 h-1 rounded-full ${p.color}`}
             style={{ left: `${p.x}%`, top: `${p.y}%` }}
             animate={{
               y: [0, p.drift],
@@ -58,17 +59,29 @@ export default function SplashScreen() {
         ))}
       </div>
 
-      {/* Ball animation */}
+      {/* Ping pong ball - realistic */}
       <motion.div
         className="relative mb-8"
         initial={{ scale: 0, rotate: -180 }}
         animate={{ scale: 1, rotate: 0 }}
         transition={{ type: 'spring', duration: 1, delay: 0.2 }}
       >
-        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-neon-blue to-neon-purple shadow-[0_0_30px_rgba(0,212,255,0.5),0_0_60px_rgba(168,85,247,0.3)]" />
+        <div className="w-24 h-24 rounded-full relative" style={{
+          background: 'radial-gradient(circle at 35% 35%, #fff8e7, #f5d060 40%, #d4a017 70%, #a67c00 100%)',
+          boxShadow: '0 0 40px rgba(245,208,96,0.4), 0 0 80px rgba(212,160,23,0.2), inset 0 -4px 8px rgba(0,0,0,0.2)',
+        }}>
+          {/* Highlight */}
+          <div className="absolute top-3 left-4 w-6 h-4 rounded-full bg-white/40 blur-[2px]" />
+          {/* Seam line */}
+          <div className="absolute inset-0 rounded-full" style={{
+            border: '1.5px dashed rgba(166,124,0,0.4)',
+            transform: 'rotate(-20deg)',
+          }} />
+        </div>
         <motion.div
-          className="absolute inset-0 rounded-full border-2 border-neon-blue/50"
-          animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
+          className="absolute inset-0 rounded-full"
+          style={{ border: '2px solid rgba(245,208,96,0.3)' }}
+          animate={{ scale: [1, 1.5, 1], opacity: [0.4, 0, 0.4] }}
           transition={{ duration: 2, repeat: Infinity }}
         />
       </motion.div>
@@ -80,10 +93,10 @@ export default function SplashScreen() {
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.5, duration: 0.8 }}
       >
-        <span className="text-transparent bg-clip-text bg-gradient-to-r from-neon-blue via-neon-purple to-neon-pink">
+        <span className="text-transparent bg-clip-text bg-gradient-to-r from-gold-light via-gold to-neon-orange">
           CHAIN
         </span>
-        <span className="text-white ml-3">PONG</span>
+        <span className="text-white/90 ml-3">PONG</span>
       </motion.h1>
 
       {/* Tagline */}
@@ -104,7 +117,8 @@ export default function SplashScreen() {
         transition={{ delay: 1 }}
       >
         <motion.div
-          className="h-full bg-gradient-to-r from-neon-blue to-neon-purple rounded-full"
+          className="h-full rounded-full"
+          style={{ background: 'linear-gradient(90deg, #d4a017, #f5d060, #10b981)' }}
           initial={{ width: '0%' }}
           animate={{ width: '100%' }}
           transition={{ delay: 1.2, duration: 1.5, ease: 'easeInOut' }}

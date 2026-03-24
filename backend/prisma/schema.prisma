@@ -1,0 +1,267 @@
+// ─────────────────────────────────────────────────────────
+// Chain Pong — Database Schema
+// PostgreSQL via Prisma ORM
+// ─────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════
+// USER & AUTH
+// ═══════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(uuid())
+  email         String?   @unique
+  username      String    @unique
+  passwordHash  String?   // null for wallet-only users
+  authMethod    AuthMethod
+  walletAddress String?   @unique @map("wallet_address")
+  gameWallet    String?   @unique @map("game_wallet") // real ETH address for email users
+  encryptedKey  String?   @map("encrypted_key") // AES-encrypted private key
+  avatar        String    @default("🎮")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  lastLoginAt   DateTime? @map("last_login_at")
+  isBanned      Boolean   @default(false) @map("is_banned")
+  lastSyncedBlock BigInt?  @map("last_synced_block") // last block scanned for deposits
+
+  // Relations
+  stats         PlayerStats?
+  ownedBoards   UserBoard[]
+  matchesAsP1   Match[]        @relation("MatchPlayer1")
+  matchesAsP2   Match[]        @relation("MatchPlayer2")
+  matchesWon    Match[]        @relation("MatchWinner")
+  transactions  Transaction[]
+  refreshTokens RefreshToken[]
+  passwordResets PasswordResetToken[]
+
+  @@index([username])
+  @@index([walletAddress])
+  @@index([createdAt])
+  @@map("users")
+}
+
+enum AuthMethod {
+  EMAIL
+  WALLET
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ═══════════════════════════════════════════════════════
+// PASSWORD RESET TOKENS
+// ═══════════════════════════════════════════════════════
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([token])
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ═══════════════════════════════════════════════════════
+// PLAYER STATS (1:1 with User)
+// ═══════════════════════════════════════════════════════
+
+model PlayerStats {
+  id            String  @id @default(uuid())
+  userId        String  @unique @map("user_id")
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wins          Int     @default(0)
+  losses        Int     @default(0)
+  gamesPlayed   Int     @default(0) @map("games_played")
+  totalEarnings Decimal @default(0) @map("total_earnings") @db.Decimal(18, 8)
+  totalLost     Decimal @default(0) @map("total_lost") @db.Decimal(18, 8)
+  winStreak     Int     @default(0) @map("win_streak")
+  bestStreak    Int     @default(0) @map("best_streak")
+  rating        Int     @default(1000) // ELO rating for matchmaking
+
+  @@index([wins(sort: Desc)])
+  @@index([rating(sort: Desc)])
+  @@map("player_stats")
+}
+
+// ═══════════════════════════════════════════════════════
+// BOARDS & OWNERSHIP
+// ═══════════════════════════════════════════════════════
+
+model Board {
+  id              String   @id
+  name            String
+  price           Decimal  @db.Decimal(18, 8)
+  color           String
+  gradient        String
+  perk            String
+  perkDescription String   @map("perk_description")
+  perkIcon        String   @map("perk_icon")
+  rarity          Rarity   @default(COMMON)
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  owners UserBoard[]
+
+  @@map("boards")
+}
+
+enum Rarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+model UserBoard {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  boardId     String   @map("board_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  board       Board    @relation(fields: [boardId], references: [id])
+  purchasedAt DateTime @default(now()) @map("purchased_at")
+  txHash      String?  @map("tx_hash") // on-chain purchase tx
+
+  @@unique([userId, boardId])
+  @@index([userId])
+  @@map("user_boards")
+}
+
+// ═══════════════════════════════════════════════════════
+// MATCHES & GAME RESULTS
+// ═══════════════════════════════════════════════════════
+
+model Match {
+  id            String      @id @default(uuid())
+  mode          GameMode
+  status        MatchStatus @default(PENDING)
+
+  // Players
+  player1Id     String      @map("player1_id")
+  player2Id     String?     @map("player2_id") // null for vs-computer
+  winnerId      String?     @map("winner_id")
+  player1       User        @relation("MatchPlayer1", fields: [player1Id], references: [id])
+  player2       User?       @relation("MatchPlayer2", fields: [player2Id], references: [id])
+  winner        User?       @relation("MatchWinner", fields: [winnerId], references: [id])
+
+  // Scores
+  player1Score  Int         @default(0) @map("player1_score")
+  player2Score  Int         @default(0) @map("player2_score")
+
+  // Staking
+  stakeAmount   Decimal     @default(0) @map("stake_amount") @db.Decimal(18, 8)
+  potAmount     Decimal     @default(0) @map("pot_amount") @db.Decimal(18, 8)
+
+  // Board & Perk
+  player1Board  String?     @map("player1_board")
+  player2Board  String?     @map("player2_board")
+  player1Perk   Boolean     @default(false) @map("player1_perk_used")
+  player2Perk   Boolean     @default(false) @map("player2_perk_used")
+
+  // Computer difficulty (for PvE)
+  difficulty    Difficulty?
+
+  // Timing
+  startedAt     DateTime?   @map("started_at")
+  endedAt       DateTime?   @map("ended_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  // On-chain
+  stakeTxHash   String?     @map("stake_tx_hash")
+  payoutTxHash  String?     @map("payout_tx_hash")
+  onChainMatchId String?    @map("on_chain_match_id") // bytes32 match ID used on-chain
+  onChainSynced Boolean     @default(false) @map("on_chain_synced")
+
+  @@index([player1Id])
+  @@index([player2Id])
+  @@index([winnerId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@map("matches")
+}
+
+enum GameMode {
+  PVP
+  COMPUTER
+}
+
+enum MatchStatus {
+  PENDING      // waiting for opponent
+  MATCHED      // both players joined, stakes locked
+  IN_PROGRESS  // game is being played
+  COMPLETED    // game over, results recorded
+  CANCELLED    // match was cancelled
+  DISPUTED     // needs admin review
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+// ═══════════════════════════════════════════════════════
+// TRANSACTIONS (deposits, withdrawals, stakes, payouts)
+// ═══════════════════════════════════════════════════════
+
+model Transaction {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      TransactionType
+  amount    Decimal         @db.Decimal(18, 8)
+  status    TxStatus        @default(PENDING)
+  txHash    String?         @unique @map("tx_hash")
+  matchId   String?         @map("match_id") // link to match for stake/payout
+  metadata  Json?           // extra data (board id for purchase, etc.)
+  blockNumber BigInt?       @map("block_number") // on-chain block number
+  createdAt DateTime        @default(now()) @map("created_at")
+  confirmedAt DateTime?     @map("confirmed_at")
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@map("transactions")
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  STAKE_LOCK     // ETH locked for a PvP match
+  STAKE_RETURN   // ETH returned (match cancelled)
+  PAYOUT         // winnings from a match
+  BOARD_PURCHASE // bought a board
+  PROTOCOL_FEE   // 2.5% match fee collected by platform
+}
+
+enum TxStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REVERTED
+}
