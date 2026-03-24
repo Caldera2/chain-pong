@@ -254,25 +254,32 @@ export default function Profile() {
           {/* Owned Boards */}
           <div className="glass rounded-2xl p-4 sm:p-6 mb-4 sm:mb-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-white">My Boards ({ownedBoards.length}/{boards.length})</h3>
+              <h3 className="text-lg font-bold text-white">My Boards ({ownedBoards.length})</h3>
               <button onClick={() => setScreen('shop')} className="text-sm text-gold-light hover:underline">
                 Get More →
               </button>
             </div>
-            <div className="grid grid-cols-4 sm:grid-cols-4 gap-2 sm:gap-3">
-              {boards.map((board) => (
-                <div
-                  key={board.id}
-                  className={`rounded-xl p-2 sm:p-3 text-center transition-all ${
-                    board.owned ? 'glass' : 'bg-white/[0.02] opacity-40'
-                  }`}
-                >
-                  <div className="text-xl sm:text-2xl mb-0.5 sm:mb-1">{board.perkIcon}</div>
-                  <div className="text-[10px] sm:text-xs font-medium text-white truncate">{board.name}</div>
-                  {!board.owned && <div className="text-[10px] text-gray-600 mt-0.5">🔒</div>}
-                </div>
-              ))}
-            </div>
+            {ownedBoards.length > 0 ? (
+              <div className="grid grid-cols-4 sm:grid-cols-4 gap-2 sm:gap-3">
+                {ownedBoards.map((board) => (
+                  <div
+                    key={board.id}
+                    className="rounded-xl p-2 sm:p-3 text-center transition-all glass"
+                  >
+                    <div className="text-xl sm:text-2xl mb-0.5 sm:mb-1">{board.perkIcon}</div>
+                    <div className="text-[10px] sm:text-xs font-medium text-white truncate">{board.name}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-6">
+                <div className="text-2xl mb-2">🏓</div>
+                <p className="text-sm text-gray-500">No boards yet</p>
+                <button onClick={() => setScreen('shop')} className="text-xs text-gold-light hover:underline mt-1">
+                  Browse Shop
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Transaction History Link */}
