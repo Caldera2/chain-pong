@@ -1,13 +1,8 @@
 // ─────────────────────────────────────────────────────────
 // Chain Pong — Frontend API Client
-// Connects to the Express backend on port 4000
 // ─────────────────────────────────────────────────────────
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || (
-  typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-    ? 'https://chain-pong-api.vercel.app/api'
-    : 'http://localhost:4000/api'
-);
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://chain-pong-api.vercel.app/api';
 
 // ─── Token Management ───────────────────────────────────
 
