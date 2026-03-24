@@ -1393,7 +1393,7 @@ function loadAuth(): { isLoggedIn: boolean; userEmail: string; username: string;
         userEmail: parsed.userEmail ?? '',
         username: parsed.username ?? 'Player',
         authMethod: parsed.authMethod ?? null,
-        gameWallet: parsed.gameWallet ?? null,
+        gameWallet: null, // always fetch real address from backend via syncFromBackend
       };
     }
   } catch {}
@@ -1402,7 +1402,9 @@ function loadAuth(): { isLoggedIn: boolean; userEmail: string; username: string;
 
 function saveAuth(auth: { isLoggedIn: boolean; userEmail: string; username: string; authMethod: AuthMethod; gameWallet: string | null }) {
   if (typeof window === 'undefined') return;
-  try { localStorage.setItem('chainpong-auth', JSON.stringify(auth)); } catch {}
+  // Don't persist gameWallet — real address comes from backend
+  const { gameWallet: _, ...rest } = auth;
+  try { localStorage.setItem('chainpong-auth', JSON.stringify(rest)); } catch {}
 }
 
 // Load persisted stats
