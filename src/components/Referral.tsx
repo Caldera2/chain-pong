@@ -1,9 +1,10 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
+import { apiGetSocials, apiUpdateSocials, type SocialLinks } from '@/lib/api';
 
 const TIERS = [
   {
@@ -32,9 +33,57 @@ const TIERS = [
   },
 ];
 
+const SOCIALS = [
+  {
+    key: 'xHandle' as const,
+    label: 'X (Twitter)',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+      </svg>
+    ),
+    placeholder: 'username (without @)',
+    profileUrl: (handle: string) => `https://x.com/${handle}`,
+    color: '#ffffff',
+  },
+  {
+    key: 'farcasterName' as const,
+    label: 'Farcaster',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M5.315 2.1c.791-.39 1.718-.39 2.51 0l8.212 4.075a2.69 2.69 0 0 1 1.505 2.418v6.814a2.69 2.69 0 0 1-1.505 2.418L7.825 21.9c-.791.39-1.718.39-2.51 0L3.103 17.825A2.69 2.69 0 0 1 1.598 15.407V8.593a2.69 2.69 0 0 1 1.505-2.418L5.315 2.1z" />
+      </svg>
+    ),
+    placeholder: 'username',
+    profileUrl: (handle: string) => `https://warpcast.com/${handle}`,
+    color: '#8B5CF6',
+  },
+  {
+    key: 'telegramUser' as const,
+    label: 'Telegram',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+      </svg>
+    ),
+    placeholder: 'username (without @)',
+    profileUrl: (handle: string) => `https://t.me/${handle}`,
+    color: '#26A5E4',
+  },
+];
+
 export default function Referral() {
-  const { setScreen, username, address } = useGameStore();
+  const { setScreen, username } = useGameStore();
   const [copied, setCopied] = useState(false);
+  const [socials, setSocials] = useState<SocialLinks>({
+    xHandle: null,
+    farcasterName: null,
+    telegramUser: null,
+  });
+  const [editing, setEditing] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [loadingSocials, setLoadingSocials] = useState(true);
 
   // Referral stats
   const referralCode = username ? username.toLowerCase().replace(/\s/g, '') : 'player';
@@ -43,14 +92,52 @@ export default function Referral() {
   const pendingReferrals = 0;
   const feesSaved = 0;
   const currentTierIdx = TIERS.findIndex((t) => activeReferrals < t.friends);
-  const currentTier = currentTierIdx === -1 ? TIERS[TIERS.length - 1] : TIERS[Math.max(0, currentTierIdx - 1)];
   const nextTier = currentTierIdx === -1 ? null : TIERS[currentTierIdx];
   const progress = nextTier ? (activeReferrals / nextTier.friends) * 100 : 100;
+
+  useEffect(() => {
+    apiGetSocials().then((res) => {
+      if (res.success && res.data) {
+        setSocials(res.data);
+      }
+      setLoadingSocials(false);
+    });
+  }, []);
 
   const copyLink = () => {
     navigator.clipboard.writeText(referralLink).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const startEditing = (key: string) => {
+    setEditing(key);
+    setInputValue((socials as any)[key] || '');
+  };
+
+  const saveSocial = async (key: string) => {
+    setSaving(true);
+    const value = inputValue.trim().replace(/^@/, '') || null;
+    const res = await apiUpdateSocials({ [key]: value });
+    if (res.success && res.data) {
+      setSocials(res.data);
+    }
+    setSaving(false);
+    setEditing(null);
+    setInputValue('');
+  };
+
+  const unlinkSocial = async (key: string) => {
+    setSaving(true);
+    const res = await apiUpdateSocials({ [key]: null });
+    if (res.success && res.data) {
+      setSocials(res.data);
+    }
+    setSaving(false);
+  };
+
+  const openProfile = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -125,19 +212,117 @@ export default function Referral() {
               {copied ? '✓ Copied' : 'Copy'}
             </button>
           </div>
+        </motion.div>
 
-          {/* Share buttons */}
-          <div className="flex items-center gap-2 mt-3">
-            <span className="text-[10px] text-gray-600 mr-1">Share:</span>
-            {['Farcaster', 'X', 'Telegram'].map((platform) => (
-              <button
-                key={platform}
-                className="bg-white/[0.03] border border-white/8 hover:border-white/20 rounded-lg px-3 py-1.5 text-[10px] text-gray-400 hover:text-white transition-all font-medium"
-              >
-                {platform}
-              </button>
-            ))}
+        {/* Social Accounts */}
+        <motion.div
+          className="glass-elevated rounded-2xl p-5 mb-4"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <h3 className="text-sm font-bold text-white mb-3">Linked Accounts</h3>
+          <div className="space-y-2.5">
+            {SOCIALS.map((social) => {
+              const value = socials[social.key];
+              const isEditing = editing === social.key;
+              const isLinked = !!value;
+
+              return (
+                <div key={social.key}>
+                  <div
+                    className="flex items-center gap-3 rounded-xl p-3 transition-all bg-white/[0.03] border border-white/8 hover:border-white/15"
+                  >
+                    <div
+                      className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                      style={{
+                        background: `${social.color}12`,
+                        border: `1px solid ${social.color}25`,
+                        color: social.color,
+                      }}
+                    >
+                      {social.icon}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-gray-500">{social.label}</div>
+                      {isLinked ? (
+                        <div className="text-sm text-white font-medium truncate">@{value}</div>
+                      ) : (
+                        <div className="text-xs text-gray-600">Not linked</div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isLinked ? (
+                        <>
+                          <button
+                            onClick={() => openProfile(social.profileUrl(value!))}
+                            className="px-3 py-1.5 rounded-lg text-[10px] font-semibold transition-all bg-white/[0.05] border border-white/10 hover:border-white/25 text-gray-300 hover:text-white"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => unlinkSocial(social.key)}
+                            disabled={saving}
+                            className="px-3 py-1.5 rounded-lg text-[10px] font-semibold transition-all bg-red-500/10 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300"
+                          >
+                            Unlink
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => startEditing(social.key)}
+                          className="px-3 py-1.5 rounded-lg text-[10px] font-semibold transition-all btn-primary"
+                        >
+                          Link
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Inline edit form */}
+                  <AnimatePresence>
+                    {isEditing && (
+                      <motion.div
+                        className="mt-1.5 flex items-center gap-2 px-1"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                      >
+                        <input
+                          type="text"
+                          value={inputValue}
+                          onChange={(e) => setInputValue(e.target.value)}
+                          placeholder={social.placeholder}
+                          autoFocus
+                          className="flex-1 bg-white/[0.03] border border-white/10 focus:border-white/25 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 outline-none transition-colors"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveSocial(social.key);
+                            if (e.key === 'Escape') { setEditing(null); setInputValue(''); }
+                          }}
+                        />
+                        <button
+                          onClick={() => saveSocial(social.key)}
+                          disabled={saving || !inputValue.trim()}
+                          className="px-3 py-2 rounded-lg text-xs font-semibold bg-mint/15 text-mint border border-mint/30 hover:bg-mint/25 transition-all disabled:opacity-40"
+                        >
+                          {saving ? '...' : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => { setEditing(null); setInputValue(''); }}
+                          className="px-3 py-2 rounded-lg text-xs font-semibold text-gray-500 hover:text-white transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
           </div>
+          {loadingSocials && (
+            <div className="text-center text-xs text-gray-600 mt-3">Loading...</div>
+          )}
         </motion.div>
 
         {/* Stats */}
@@ -145,7 +330,7 @@ export default function Referral() {
           className="grid grid-cols-3 gap-3 mb-4"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
+          transition={{ delay: 0.25 }}
         >
           <div className="glass-elevated rounded-xl p-3 text-center">
             <div className="text-xl font-bold text-white">{activeReferrals}</div>
@@ -166,7 +351,7 @@ export default function Referral() {
           className="glass-elevated rounded-2xl p-5 mb-4"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
+          transition={{ delay: 0.3 }}
         >
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white">Referral Tiers</h3>
@@ -233,7 +418,7 @@ export default function Referral() {
           className="text-center text-[10px] text-gray-600 mb-6"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.3 }}
+          transition={{ delay: 0.35 }}
         >
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" className="inline mr-1 -mt-0.5">
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5"/>
@@ -247,7 +432,7 @@ export default function Referral() {
           className="text-gray-600 hover:text-white transition-colors mx-auto block text-sm"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.35 }}
+          transition={{ delay: 0.4 }}
         >
           ← Back to Lobby
         </motion.button>

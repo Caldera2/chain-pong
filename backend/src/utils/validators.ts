@@ -76,6 +76,14 @@ export const updateProfileSchema = z.object({
   avatar: z.string().max(10).optional(),
 });
 
+// ─── Social Links ────────────────────────────────────
+
+export const updateSocialsSchema = z.object({
+  xHandle: z.string().max(50).regex(/^[a-zA-Z0-9_]*$/, 'Invalid X handle').optional().nullable(),
+  farcasterName: z.string().max(50).regex(/^[a-zA-Z0-9._-]*$/, 'Invalid Farcaster name').optional().nullable(),
+  telegramUser: z.string().max(50).regex(/^[a-zA-Z0-9_]*$/, 'Invalid Telegram username').optional().nullable(),
+});
+
 // ─── Withdrawal ──────────────────────────────────────
 
 export const withdrawSchema = z.object({

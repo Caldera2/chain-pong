@@ -26,6 +26,12 @@ model User {
   gameWallet    String?   @unique @map("game_wallet") // real ETH address for email users
   encryptedKey  String?   @map("encrypted_key") // AES-encrypted private key
   avatar        String    @default("🎮")
+
+  // Social links
+  xHandle       String?   @map("x_handle")
+  farcasterName String?   @map("farcaster_name")
+  telegramUser  String?   @map("telegram_user")
+
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
   lastLoginAt   DateTime? @map("last_login_at")

@@ -47,6 +47,9 @@ export async function getProfile(userId: string) {
     walletAddress: user.walletAddress,
     gameWallet: user.gameWallet,
     avatar: user.avatar,
+    xHandle: user.xHandle,
+    farcasterName: user.farcasterName,
+    telegramUser: user.telegramUser,
     createdAt: user.createdAt.toISOString(),
     stats: user.stats ? {
       wins: user.stats.wins,

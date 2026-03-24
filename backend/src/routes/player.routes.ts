@@ -2,7 +2,7 @@ import { Router, Response, NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth';
 import * as playerService from '../services/player.service';
 import { syncDeposits, executeWithdrawal, getFullBalance } from '../services/blockchain.service';
-import { updateProfileSchema, purchaseBoardSchema, withdrawSchema } from '../utils/validators';
+import { updateProfileSchema, purchaseBoardSchema, withdrawSchema, updateSocialsSchema } from '../utils/validators';
 import { AuthRequest } from '../types';
 
 const router = Router();
@@ -27,6 +27,44 @@ router.patch('/profile', requireAuth, async (req: AuthRequest, res: Response, ne
     const updates = updateProfileSchema.parse(req.body);
     const result = await playerService.updateProfile(req.user!.userId, updates);
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// PATCH /api/player/socials — Update social links
+// ─────────────────────────────────────────────────────────
+router.patch('/socials', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const updates = updateSocialsSchema.parse(req.body);
+    const { prisma } = await import('../config/database');
+    const user = await prisma.user.update({
+      where: { id: req.user!.userId },
+      data: {
+        xHandle: updates.xHandle !== undefined ? updates.xHandle : undefined,
+        farcasterName: updates.farcasterName !== undefined ? updates.farcasterName : undefined,
+        telegramUser: updates.telegramUser !== undefined ? updates.telegramUser : undefined,
+      },
+      select: { xHandle: true, farcasterName: true, telegramUser: true },
+    });
+    res.json({ success: true, data: user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/player/socials — Get current social links
+// ─────────────────────────────────────────────────────────
+router.get('/socials', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { prisma } = await import('../config/database');
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { xHandle: true, farcasterName: true, telegramUser: true },
+    });
+    res.json({ success: true, data: user });
   } catch (error) {
     next(error);
   }

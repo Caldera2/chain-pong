@@ -364,6 +364,25 @@ export async function apiResetPassword(token: string, newPassword: string) {
   });
 }
 
+// ─── Social Links ─────────────────────────────────────
+
+export interface SocialLinks {
+  xHandle: string | null;
+  farcasterName: string | null;
+  telegramUser: string | null;
+}
+
+export async function apiGetSocials() {
+  return request<SocialLinks>('/player/socials');
+}
+
+export async function apiUpdateSocials(updates: Partial<SocialLinks>) {
+  return request<SocialLinks>('/player/socials', {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
 // ─── Wallet Export ─────────────────────────────────────
 
 export async function apiExportKey() {
