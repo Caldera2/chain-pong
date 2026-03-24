@@ -1380,17 +1380,6 @@ function saveJoinedAt(ts: number) {
   try { localStorage.setItem('chainpong-joinedat', String(ts)); } catch {}
 }
 
-// Generate a deterministic game wallet address from email
-function generateGameWallet(email: string): string {
-  let hash = 0;
-  for (let i = 0; i < email.length; i++) {
-    const char = email.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  const hex = Math.abs(hash).toString(16).padStart(8, '0');
-  return `0x${hex}${'a'.repeat(32)}${hex}`.slice(0, 42);
-}
 
 // Load persisted auth
 function loadAuth(): { isLoggedIn: boolean; userEmail: string; username: string; authMethod: AuthMethod; gameWallet: string | null } {
@@ -1474,7 +1463,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   authMethod: initialAuth.authMethod,
 
   login: (email, username, method) => {
-    const gameWallet = method === 'email' ? generateGameWallet(email) : null;
+    const gameWallet = null; // real address comes from backend via syncFromBackend
     const auth = { isLoggedIn: true, userEmail: email, username, authMethod: method, gameWallet };
     saveAuth(auth);
     try {
@@ -1505,7 +1494,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   signup: (email, username, method) => {
-    const gameWallet = method === 'email' ? generateGameWallet(email) : null;
+    const gameWallet = null; // real address comes from backend via syncFromBackend
     const auth = { isLoggedIn: true, userEmail: email, username, authMethod: method, gameWallet };
     saveAuth(auth);
     try {
@@ -1746,6 +1735,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           set({
             userId: p.id,
             username: p.username,
+            gameWallet: p.gameWallet || null,
             wins: stats.wins,
             losses: stats.losses,
             gamesPlayed: stats.gamesPlayed,
@@ -1804,3 +1794,4 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 }));
+
