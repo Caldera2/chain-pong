@@ -129,10 +129,10 @@ export interface AuthResponse {
   refreshToken: string;
 }
 
-export async function apiSignup(email: string, username: string, password: string) {
+export async function apiSignup(email: string, username: string, password: string, referralCode?: string) {
   const res = await request<AuthResponse>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ email, username, password }),
+    body: JSON.stringify({ email, username, password, ...(referralCode ? { referralCode } : {}) }),
   });
   if (res.success && res.data) {
     saveTokens(res.data.accessToken, res.data.refreshToken);

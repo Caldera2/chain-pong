@@ -25,13 +25,21 @@ export default function GameApp() {
   const screen = useGameStore((s) => s.screen);
   const [resetToken, setResetToken] = useState<string | null>(null);
 
-  // Check URL for reset-token parameter on mount
+  // Check URL for reset-token and referral parameters on mount
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const token = params.get('reset-token');
     if (token) {
       setResetToken(token);
+    }
+    // Handle referral link: ?ref=username
+    const ref = params.get('ref');
+    if (ref) {
+      useGameStore.getState().setReferralCode(ref);
+      useGameStore.getState().setScreen('signup');
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
 

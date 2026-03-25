@@ -87,7 +87,8 @@ export default function Referral() {
 
   // Referral stats
   const referralCode = username ? username.toLowerCase().replace(/\s/g, '') : 'player';
-  const referralLink = `baseping.io/join/${referralCode}`;
+  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://chain-pong.vercel.app';
+  const referralLink = `${siteUrl}?ref=${referralCode}`;
   const activeReferrals = 0;
   const pendingReferrals = 0;
   const feesSaved = 0;

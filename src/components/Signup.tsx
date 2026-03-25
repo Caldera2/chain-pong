@@ -9,7 +9,7 @@ import { apiSignup } from '@/lib/api';
 const AVATARS = ['🏓', '⚡', '🔥', '💎', '🎯', '👑', '🌀', '🎮', '🤖', '🦊'];
 
 export default function Signup() {
-  const { signup, setScreen } = useGameStore();
+  const { signup, setScreen, referralCode } = useGameStore();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -57,7 +57,7 @@ export default function Signup() {
     setLoading(true);
     try {
       // All signups go through the backend — it stores email, username, hashed password
-      const res = await apiSignup(email, username, password);
+      const res = await apiSignup(email, username, password, referralCode || undefined);
       if (res.success && res.data) {
         // Show seed phrase before completing signup
         const data = res.data as any;
@@ -102,6 +102,11 @@ export default function Signup() {
             <span className="text-white"> Chain Pong</span>
           </h1>
           <p className="text-gray-400 mt-2 text-sm sm:text-base">Create your account and start earning</p>
+          {referralCode && (
+            <div className="mt-3 inline-flex items-center gap-1.5 bg-lavender/10 border border-lavender/20 rounded-full px-3 py-1 text-xs text-lavender">
+              <span>👋</span> Referred by <span className="font-semibold">{referralCode}</span>
+            </div>
+          )}
         </div>
 
         {/* Progress steps */}

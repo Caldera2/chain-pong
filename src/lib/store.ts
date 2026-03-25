@@ -90,6 +90,10 @@ interface GameStore {
   difficulty: 'easy' | 'medium' | 'hard';
   setDifficulty: (d: GameStore['difficulty']) => void;
 
+  // Referral
+  referralCode: string | null;
+  setReferralCode: (code: string | null) => void;
+
   // PvP Staking
   pvpStakeAmount: number;
   setPvpStakeAmount: (amount: number) => void;
@@ -1606,6 +1610,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setGameMode: (gameMode) => set({ gameMode }),
   difficulty: 'medium',
   setDifficulty: (difficulty) => set({ difficulty }),
+
+  // Referral
+  referralCode: null,
+  setReferralCode: (referralCode) => set({ referralCode }),
 
   // PvP Staking
   pvpStakeAmount: 0.002,
