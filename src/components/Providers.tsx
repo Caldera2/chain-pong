@@ -4,14 +4,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider, useAccount, useBalance, useDisconnect, useSignMessage } from 'wagmi';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
-import { config } from '@/lib/wagmi';
+import { config, ACTIVE_CHAIN } from '@/lib/wagmi';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '@/lib/store';
 import { apiGetNonce, apiWalletAuth } from '@/lib/api';
 
 function WalletSync() {
   const { address, isConnected } = useAccount();
-  const { data: balanceData } = useBalance({ address });
+  const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id });
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const { setConnected, setWalletBalance, isLoggedIn, login, screen } = useGameStore();
