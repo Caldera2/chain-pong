@@ -1,20 +1,20 @@
 import { http, createConfig } from 'wagmi';
-import { base } from 'wagmi/chains';
+import { baseSepolia } from 'wagmi/chains';
 import { getDefaultConfig } from '@rainbow-me/rainbowkit';
 
 export const config = getDefaultConfig({
   appName: 'Chain Pong',
   projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID || 'chain-pong',
-  chains: [base],
+  chains: [baseSepolia],
   transports: {
-    [base.id]: http('https://mainnet.base.org'),
+    [baseSepolia.id]: http('https://sepolia.base.org'),
   },
   ssr: true,
 });
 
 // Export the chain for use across the app
-export const ACTIVE_CHAIN = base;
-export const CHAIN_NAME = 'Base';
+export const ACTIVE_CHAIN = baseSepolia;
+export const CHAIN_NAME = 'Base Sepolia';
 export const TOKEN_SYMBOL = 'ETH';
-export const IS_TESTNET = false;
-export const BLOCK_EXPLORER = 'https://basescan.org';
+export const IS_TESTNET = true;
+export const BLOCK_EXPLORER = 'https://sepolia.basescan.org';

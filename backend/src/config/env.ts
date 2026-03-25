@@ -22,8 +22,8 @@ export const env = {
   JWT_REFRESH_EXPIRES_IN: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
 
   // Blockchain
-  RPC_URL: process.env.RPC_URL || 'https://mainnet.base.org',
-  CHAIN_ID: parseInt(process.env.CHAIN_ID || '8453', 10),
+  RPC_URL: process.env.RPC_URL || 'https://sepolia.base.org',
+  CHAIN_ID: parseInt(process.env.CHAIN_ID || '84532', 10),
   STAKING_CONTRACT_ADDRESS: process.env.STAKING_CONTRACT_ADDRESS || '',
   TREASURY_PRIVATE_KEY: process.env.TREASURY_PRIVATE_KEY || '',
   TREASURY_ADDRESS: process.env.TREASURY_ADDRESS || '0x25f771D0B086602FEc043B6cCa1eD3E5fDcd8F1d',
