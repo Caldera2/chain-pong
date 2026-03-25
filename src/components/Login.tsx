@@ -13,6 +13,12 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Wallet migration state (for old users getting a new real wallet)
+  const [seedPhrase, setSeedPhrase] = useState('');
+  const [seedCopied, setSeedCopied] = useState(false);
+  const [seedConfirmed, setSeedConfirmed] = useState(false);
+  const [pendingUser, setPendingUser] = useState<{ email: string; username: string } | null>(null);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -23,15 +29,19 @@ export default function Login() {
 
     setLoading(true);
     try {
-      // All logins go through the backend — it verifies the hashed password
-      // and returns the saved username from the database
       const res = await apiLogin(email, password);
       if (res.success && res.data) {
-        // Backend verified credentials — use the username stored in the database
-        const user = res.data.user;
-        login(user.email || email, user.username, 'email');
+        const data = res.data as any;
+        const user = data.user;
+
+        // If wallet was migrated, show seed phrase first
+        if (data.seedPhrase && data.walletMigrated) {
+          setSeedPhrase(data.seedPhrase);
+          setPendingUser({ email: user.email || email, username: user.username });
+        } else {
+          login(user.email || email, user.username, 'email');
+        }
       } else {
-        // Backend rejected login (wrong email/password, banned, etc.)
         setError(res.error || 'Invalid email or password');
       }
     } catch (err: any) {
@@ -40,6 +50,88 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // Seed phrase migration screen
+  if (seedPhrase && pendingUser) {
+    return (
+      <div className="min-h-screen gradient-bg flex items-center justify-center px-4 py-8">
+        <motion.div
+          className="w-full max-w-md"
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+        >
+          <div className="glass rounded-2xl sm:rounded-3xl p-6 sm:p-8 space-y-5">
+            {/* Header */}
+            <div className="text-center">
+              <div className="w-14 h-14 rounded-full mx-auto mb-3 flex items-center justify-center bg-gradient-to-br from-gold/20 to-lavender/20 border border-gold/30">
+                <span className="text-2xl">🔑</span>
+              </div>
+              <h2 className="text-xl font-bold text-white mb-1">Wallet Upgraded</h2>
+              <p className="text-gray-400 text-sm">
+                Your game wallet has been upgraded to a real wallet. Save your recovery phrase — it&apos;s the <span className="text-coral font-medium">only way</span> to recover your wallet.
+              </p>
+            </div>
+
+            {/* Warning banner */}
+            <div className="bg-coral/10 border border-coral/20 rounded-xl p-3">
+              <p className="text-coral text-xs font-medium text-center">
+                Write these words down and store them safely. Never share them with anyone.
+              </p>
+            </div>
+
+            {/* Seed phrase grid */}
+            <div className="bg-black/40 border border-white/10 rounded-xl p-4">
+              <div className="grid grid-cols-3 gap-2">
+                {seedPhrase.split(' ').map((word, i) => (
+                  <div key={i} className="flex items-center gap-1.5 bg-white/[0.03] rounded-lg px-2 py-1.5">
+                    <span className="text-[10px] text-gray-600 w-4 text-right">{i + 1}.</span>
+                    <span className="text-white text-xs font-mono">{word}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Copy button */}
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(seedPhrase);
+                setSeedCopied(true);
+                setTimeout(() => setSeedCopied(false), 3000);
+              }}
+              className="w-full bg-white/[0.05] border border-white/10 py-2.5 rounded-xl text-sm font-medium text-white hover:bg-white/[0.08] transition-colors"
+            >
+              {seedCopied ? '✓ Copied to Clipboard' : 'Copy Recovery Phrase'}
+            </button>
+
+            {/* Confirm checkbox */}
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={seedConfirmed}
+                onChange={(e) => setSeedConfirmed(e.target.checked)}
+                className="mt-0.5 rounded border-white/20 bg-white/5 accent-gold"
+              />
+              <span className="text-gray-400 text-xs leading-relaxed">
+                I have saved my recovery phrase and understand that if I lose it, I cannot recover my wallet.
+              </span>
+            </label>
+
+            {/* Continue button */}
+            <button
+              onClick={() => {
+                login(pendingUser.email, pendingUser.username, 'email');
+              }}
+              disabled={!seedConfirmed}
+              className="w-full bg-gradient-to-r from-gold to-lavender py-3 sm:py-3.5 rounded-xl font-semibold text-white text-sm sm:text-base hover:shadow-[0_0_20px_rgba(212,160,23,0.4)] transition-shadow disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Continue to Game
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen gradient-bg flex items-center justify-center px-4 py-8">

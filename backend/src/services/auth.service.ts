@@ -82,17 +82,34 @@ export async function loginWithEmail(email: string, password: string) {
     throw new UnauthorizedError('Invalid email or password');
   }
 
-  // Update last login
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLoginAt: new Date() },
-  });
+  // Migrate old users who don't have a real wallet yet
+  let seedPhrase: string | undefined;
+  if (!user.encryptedKey) {
+    const wallet = generateGameWallet();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        gameWallet: wallet.address,
+        encryptedKey: wallet.encryptedKey,
+        lastLoginAt: new Date(),
+      },
+    });
+    seedPhrase = wallet.mnemonic;
+  } else {
+    // Update last login
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+  }
 
   const tokens = await generateTokens({ userId: user.id, username: user.username, authMethod: 'EMAIL' });
 
   return {
     user: sanitizeUser(user),
     ...tokens,
+    // Return seed phrase if wallet was just migrated — user must save it
+    ...(seedPhrase ? { seedPhrase, walletMigrated: true } : {}),
   };
 }
 
