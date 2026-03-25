@@ -11,7 +11,7 @@ import { apiGetNonce, apiWalletAuth } from '@/lib/api';
 
 function WalletSync() {
   const { address, isConnected } = useAccount();
-  const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id });
+  const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id, query: { refetchInterval: 10000 } });
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const { setConnected, setWalletBalance, isLoggedIn, login, screen } = useGameStore();
@@ -83,7 +83,7 @@ function WalletSync() {
   }, [isLoggedIn, isConnected, disconnect]);
 
   useEffect(() => {
-    if (balanceData && isLoggedInRef.current) {
+    if (balanceData) {
       const val = Number(balanceData.value) / 10 ** balanceData.decimals;
       setWalletBalance(val);
     }
