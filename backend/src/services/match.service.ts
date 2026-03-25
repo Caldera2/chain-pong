@@ -1,16 +1,89 @@
 import { Decimal } from '@prisma/client/runtime/library';
 import { ethers } from 'ethers';
 import { prisma } from '../config/database';
+import { env } from '../config/env';
 import { BadRequestError, NotFoundError, InsufficientBalanceError, ForbiddenError } from '../utils/errors';
-import { getGameWalletSigner, getTreasurySigner } from '../utils/wallet';
-import { getStakingContract, isContractConfigured, matchIdToBytes32, isContractPaused } from '../utils/contract';
+import { getGameWalletSigner, getTreasurySigner, estimateTransferGas, getOnChainBalanceWei } from '../utils/wallet';
 
 const VALID_STAKES = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05];
 const WIN_SCORE = 7; // first to 7 wins
 const PROTOCOL_FEE_BPS = 250; // 2.5% protocol fee (250 basis points)
 
+// Treasury address — all stakes and board purchases go here
+const TREASURY_ADDRESS = env.TREASURY_ADDRESS;
+
 // ─── ELO Constants ───────────────────────────────────
 const K_FACTOR = 32;
+
+// ─────────────────────────────────────────────────────────
+// Send ETH from player's game wallet to treasury
+// ─────────────────────────────────────────────────────────
+
+async function sendStakeToTreasury(userId: string, amount: number): Promise<string | null> {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { encryptedKey: true, authMethod: true },
+    });
+
+    if (!user?.encryptedKey) return null;
+
+    const signer = getGameWalletSigner(user.encryptedKey);
+    const amountWei = ethers.parseEther(amount.toString());
+
+    // Check on-chain balance covers stake + gas
+    const balance = await getOnChainBalanceWei(signer.address);
+    const gasCost = await estimateTransferGas();
+    if (balance < amountWei + gasCost) {
+      console.warn(`Player ${userId} has insufficient on-chain balance for stake`);
+      return null;
+    }
+
+    const tx = await signer.sendTransaction({
+      to: TREASURY_ADDRESS,
+      value: amountWei,
+    });
+    await tx.wait(1);
+    return tx.hash;
+  } catch (err: any) {
+    console.error(`Failed to send stake to treasury for user ${userId}:`, err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Send winnings from treasury to winner's wallet
+// ─────────────────────────────────────────────────────────
+
+async function sendPayoutFromTreasury(winnerAddress: string, amount: number): Promise<string | null> {
+  try {
+    const treasury = getTreasurySigner();
+    if (!treasury) {
+      console.error('Treasury signer not configured — cannot pay winner');
+      return null;
+    }
+
+    const amountWei = ethers.parseEther(amount.toString());
+
+    // Check treasury has enough balance
+    const treasuryBalance = await getOnChainBalanceWei(treasury.address);
+    const gasCost = await estimateTransferGas();
+    if (treasuryBalance < amountWei + gasCost) {
+      console.error(`Treasury insufficient balance. Have: ${ethers.formatEther(treasuryBalance)}, Need: ${amount}`);
+      return null;
+    }
+
+    const tx = await treasury.sendTransaction({
+      to: winnerAddress,
+      value: amountWei,
+    });
+    await tx.wait(1);
+    return tx.hash;
+  } catch (err: any) {
+    console.error('Failed to send payout from treasury:', err.message);
+    return null;
+  }
+}
 
 // ─────────────────────────────────────────────────────────
 // Create a PvE (vs Computer) match
@@ -21,7 +94,6 @@ export async function createComputerMatch(
   boardId: string,
   difficulty: 'EASY' | 'MEDIUM' | 'HARD'
 ) {
-  // Verify user owns the board
   await verifyBoardOwnership(userId, boardId);
 
   const match = await prisma.match.create({
@@ -41,7 +113,7 @@ export async function createComputerMatch(
 }
 
 // ─────────────────────────────────────────────────────────
-// Create a PvP match (player joins queue → gets matched)
+// Create a PvP match (player joins queue -> gets matched)
 // ─────────────────────────────────────────────────────────
 
 export async function createPvpMatch(
@@ -71,33 +143,13 @@ export async function createPvpMatch(
   // Lock player's stake in DB
   await createStakeLockTransaction(userId, stakeAmount, match.id);
 
-  // On-chain: stake on the contract if configured
-  if (isContractConfigured()) {
-    try {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { encryptedKey: true, authMethod: true } });
-      if (user?.encryptedKey && user.authMethod === 'EMAIL') {
-        const signer = getGameWalletSigner(user.encryptedKey);
-        const contract = getStakingContract(signer);
-        const matchIdBytes = matchIdToBytes32(match.id);
-
-        const tx = await contract!.createMatch(matchIdBytes, {
-          value: ethers.parseEther(stakeAmount.toString()),
-        });
-        const receipt = await tx.wait(1);
-
-        await prisma.match.update({
-          where: { id: match.id },
-          data: {
-            stakeTxHash: tx.hash,
-            onChainMatchId: matchIdBytes,
-            onChainSynced: true,
-          },
-        });
-      }
-    } catch (err: any) {
-      console.error('On-chain createMatch failed:', err.message);
-      // DB match is still valid — on-chain sync can be retried
-    }
+  // Send player's stake ETH to treasury on-chain
+  const stakeTxHash = await sendStakeToTreasury(userId, stakeAmount);
+  if (stakeTxHash) {
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { stakeTxHash, onChainSynced: true },
+    });
   }
 
   return match;
@@ -123,8 +175,11 @@ export async function joinPvpMatch(
   await verifyBoardOwnership(userId, boardId);
   await verifyBalance(userId, stakeAmount);
 
-  // Lock opponent's stake and update match
+  // Lock opponent's stake in DB
   await createStakeLockTransaction(userId, stakeAmount, matchId);
+
+  // Send opponent's stake ETH to treasury on-chain
+  const joinTxHash = await sendStakeToTreasury(userId, stakeAmount);
 
   const updated = await prisma.match.update({
     where: { id: matchId },
@@ -133,30 +188,13 @@ export async function joinPvpMatch(
       player2Board: boardId,
       status: 'MATCHED',
       potAmount: new Decimal(stakeAmount * 2),
+      ...(joinTxHash ? { onChainSynced: true } : {}),
     },
     include: {
       player1: { select: { id: true, username: true, avatar: true } },
       player2: { select: { id: true, username: true, avatar: true } },
     },
   });
-
-  // On-chain: join match on the contract if configured
-  if (isContractConfigured() && match.onChainMatchId) {
-    try {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { encryptedKey: true, authMethod: true } });
-      if (user?.encryptedKey && user.authMethod === 'EMAIL') {
-        const signer = getGameWalletSigner(user.encryptedKey);
-        const contract = getStakingContract(signer);
-
-        const tx = await contract!.joinMatch(match.onChainMatchId, {
-          value: ethers.parseEther(stakeAmount.toString()),
-        });
-        await tx.wait(1);
-      }
-    } catch (err: any) {
-      console.error('On-chain joinMatch failed:', err.message);
-    }
-  }
 
   return updated;
 }
@@ -230,36 +268,25 @@ export async function submitMatchResult(
       const winnerPayout = potAmount - protocolFee;
       let payoutTxHash: string | undefined;
 
-      // On-chain: settle match on the contract if configured
-      if (isContractConfigured() && match.onChainMatchId) {
-        try {
-          const treasury = getTreasurySigner();
-          if (treasury) {
-            const contract = getStakingContract(treasury);
-            // Get winner's game wallet address
-            const winner = await prisma.user.findUnique({
-              where: { id: winnerId! },
-              select: { gameWallet: true, walletAddress: true },
-            });
-            const winnerAddress = winner?.gameWallet || winner?.walletAddress;
+      // Send winnings from treasury to winner's wallet automatically
+      const winner = await prisma.user.findUnique({
+        where: { id: winnerId! },
+        select: { gameWallet: true, walletAddress: true },
+      });
+      const winnerAddress = winner?.gameWallet || winner?.walletAddress;
 
-            if (winnerAddress && contract) {
-              const tx = await contract.settleMatch(match.onChainMatchId, winnerAddress);
-              const receipt = await tx.wait(1);
-              payoutTxHash = tx.hash;
-
-              await prisma.match.update({
-                where: { id: matchId },
-                data: { payoutTxHash: tx.hash, onChainSynced: true },
-              });
-            }
-          }
-        } catch (err: any) {
-          console.error('On-chain settleMatch failed:', err.message);
+      if (winnerAddress) {
+        const txHash = await sendPayoutFromTreasury(winnerAddress, winnerPayout);
+        if (txHash) {
+          payoutTxHash = txHash;
+          await prisma.match.update({
+            where: { id: matchId },
+            data: { payoutTxHash: txHash, onChainSynced: true },
+          });
         }
       }
 
-      // Winner payout (pot minus fee)
+      // Winner payout (pot minus fee) — DB ledger
       await prisma.transaction.create({
         data: {
           userId: winnerId!,
@@ -272,7 +299,7 @@ export async function submitMatchResult(
         },
       });
 
-      // Protocol fee transaction (credited to treasury/platform)
+      // Protocol fee stays in treasury (2.5%)
       if (protocolFee > 0) {
         await prisma.transaction.create({
           data: {
@@ -324,7 +351,7 @@ export async function submitMatchResult(
 }
 
 // ─────────────────────────────────────────────────────────
-// Cancel a pending match
+// Cancel a pending match — return stake to player
 // ─────────────────────────────────────────────────────────
 
 export async function cancelMatch(matchId: string, userId: string) {
@@ -333,7 +360,7 @@ export async function cancelMatch(matchId: string, userId: string) {
   if (match.player1Id !== userId) throw new ForbiddenError('Only the match creator can cancel');
   if (match.status !== 'PENDING') throw new BadRequestError('Only pending matches can be cancelled');
 
-  // Return staked amount
+  // Return staked amount in DB
   const stakeAmount = Number(match.stakeAmount);
   if (stakeAmount > 0) {
     await prisma.transaction.create({
@@ -346,20 +373,15 @@ export async function cancelMatch(matchId: string, userId: string) {
         confirmedAt: new Date(),
       },
     });
-  }
 
-  // On-chain: cancel match on the contract if configured
-  if (isContractConfigured() && match.onChainMatchId) {
-    try {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { encryptedKey: true, authMethod: true } });
-      if (user?.encryptedKey && user.authMethod === 'EMAIL') {
-        const signer = getGameWalletSigner(user.encryptedKey);
-        const contract = getStakingContract(signer);
-        const tx = await contract!.cancelMatch(match.onChainMatchId);
-        await tx.wait(1);
-      }
-    } catch (err: any) {
-      console.error('On-chain cancelMatch failed:', err.message);
+    // Return ETH from treasury back to player's wallet
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { gameWallet: true, walletAddress: true },
+    });
+    const playerAddress = user?.gameWallet || user?.walletAddress;
+    if (playerAddress) {
+      await sendPayoutFromTreasury(playerAddress, stakeAmount);
     }
   }
 
@@ -452,7 +474,6 @@ async function verifyBoardOwnership(userId: string, boardId: string) {
 }
 
 async function verifyBalance(userId: string, amount: number) {
-  // Calculate effective balance: total earnings - total lost - pending stakes
   const stats = await prisma.playerStats.findUnique({ where: { userId } });
   if (!stats) throw new NotFoundError('Player stats not found');
 

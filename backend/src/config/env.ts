@@ -26,6 +26,7 @@ export const env = {
   CHAIN_ID: parseInt(process.env.CHAIN_ID || '8453', 10),
   STAKING_CONTRACT_ADDRESS: process.env.STAKING_CONTRACT_ADDRESS || '',
   TREASURY_PRIVATE_KEY: process.env.TREASURY_PRIVATE_KEY || '',
+  TREASURY_ADDRESS: process.env.TREASURY_ADDRESS || '0x25f771D0B086602FEc043B6cCa1eD3E5fDcd8F1d',
 
   // Rate Limiting
   RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),

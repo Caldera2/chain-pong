@@ -2,7 +2,8 @@ import { ethers } from 'ethers';
 import { prisma } from '../config/database';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors';
 import { Decimal } from '@prisma/client/runtime/library';
-import { getGameWalletSigner, getTreasurySigner } from '../utils/wallet';
+import { getGameWalletSigner } from '../utils/wallet';
+import { env } from '../config/env';
 
 // ─────────────────────────────────────────────────────────
 // Get Player Profile
@@ -182,11 +183,10 @@ export async function purchaseBoard(userId: string, boardId: string, txHash?: st
   if (price > 0) {
     try {
       const user = await prisma.user.findUnique({ where: { id: userId }, select: { encryptedKey: true, authMethod: true } });
-      const treasury = getTreasurySigner();
-      if (user?.encryptedKey && user.authMethod === 'EMAIL' && treasury) {
+      if (user?.encryptedKey && user.authMethod === 'EMAIL') {
         const signer = getGameWalletSigner(user.encryptedKey);
         const tx = await signer.sendTransaction({
-          to: treasury.address,
+          to: env.TREASURY_ADDRESS,
           value: ethers.parseEther(price.toString()),
         });
         await tx.wait(1);
