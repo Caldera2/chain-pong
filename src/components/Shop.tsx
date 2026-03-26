@@ -1,12 +1,20 @@
 'use client';
 
 import { useGameStore, Board } from '@/lib/store';
-import { IS_TESTNET, CHAIN_NAME, TOKEN_SYMBOL } from '@/lib/wagmi';
-import { useState } from 'react';
+import { IS_TESTNET, CHAIN_NAME, TOKEN_SYMBOL, ACTIVE_CHAIN } from '@/lib/wagmi';
+import { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { ArrowLeft, Check, Wallet, Lock } from 'lucide-react';
+import {
+  ArrowLeft, Check, Wallet, Lock, Loader2,
+  ShieldCheck, AlertTriangle, X,
+} from 'lucide-react';
+import { useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
+import { parseEther } from 'viem';
+
+// Treasury address for wallet-user on-chain purchases
+const TREASURY_ADDRESS = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || '0x25f771D0B086602FEc043B6cCa1eD3E5fDcd8F1d';
 
 const RARITY_STYLES: Record<string, { label: string; text: string; border: string; bg: string }> = {
   common:    { label: 'Common',    text: 'text-zinc-400',   border: 'border-zinc-500/20', bg: 'bg-zinc-500/10' },
@@ -15,7 +23,18 @@ const RARITY_STYLES: Record<string, { label: string; text: string; border: strin
   legendary: { label: 'Legendary', text: 'text-amber-400',  border: 'border-amber-500/20', bg: 'bg-amber-500/10' },
 };
 
-function BoardCard({ board, onBuy, canAfford }: { board: Board; onBuy: () => void; canAfford: boolean }) {
+// ─── Board Card ────────────────────────────────────────
+function BoardCard({
+  board,
+  onBuy,
+  canAfford,
+  isBuying,
+}: {
+  board: Board;
+  onBuy: () => void;
+  canAfford: boolean;
+  isBuying: boolean;
+}) {
   const rs = RARITY_STYLES[board.rarity] || RARITY_STYLES.common;
 
   return (
@@ -62,10 +81,12 @@ function BoardCard({ board, onBuy, canAfford }: { board: Board; onBuy: () => voi
               size="sm"
               className="w-full"
               onClick={onBuy}
-              disabled={!canAfford}
+              disabled={!canAfford || isBuying}
               variant={canAfford ? 'default' : 'outline'}
             >
-              {canAfford ? (
+              {isBuying ? (
+                <><Loader2 className="w-3 h-3 animate-spin" /> Processing...</>
+              ) : canAfford ? (
                 <>Buy</>
               ) : (
                 <><Lock className="w-3 h-3" /> Insufficient</>
@@ -78,11 +99,199 @@ function BoardCard({ board, onBuy, canAfford }: { board: Board; onBuy: () => voi
   );
 }
 
+// ─── Purchase Confirmation Modal ───────────────────────
+function PurchaseModal({
+  board,
+  status,
+  error,
+  onConfirm,
+  onClose,
+  authMethod,
+}: {
+  board: Board;
+  status: 'confirm' | 'signing' | 'confirming' | 'success' | 'error';
+  error: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+  authMethod: string;
+}) {
+  const rs = RARITY_STYLES[board.rarity] || RARITY_STYLES.common;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={status === 'confirm' || status === 'error' ? onClose : undefined} />
+
+      {/* Modal */}
+      <Card className="relative z-10 w-full max-w-sm border-border/60">
+        <CardContent className="p-5 sm:p-6 space-y-5">
+          {/* Close button */}
+          {(status === 'confirm' || status === 'error' || status === 'success') && (
+            <button onClick={onClose} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground">
+              <X className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Board preview */}
+          <div className="text-center space-y-2">
+            <span className="text-4xl">{board.perkIcon}</span>
+            <h3 className="font-heading text-lg font-bold">{board.name}</h3>
+            <Badge className={`${rs.text} ${rs.bg} ${rs.border} text-[10px]`} variant="outline">
+              {rs.label}
+            </Badge>
+          </div>
+
+          {/* Status-specific content */}
+          {status === 'confirm' && (
+            <>
+              <div className="space-y-2.5 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Price</span>
+                  <span className="font-semibold">{board.price} {TOKEN_SYMBOL}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Network</span>
+                  <Badge variant="outline" className="text-[10px]">{CHAIN_NAME}</Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Payment</span>
+                  <span className="text-xs">{authMethod === 'wallet' ? 'Connected Wallet' : 'Game Wallet'}</span>
+                </div>
+              </div>
+              <Button className="w-full" onClick={onConfirm}>
+                <ShieldCheck className="w-4 h-4" />
+                {authMethod === 'wallet' ? 'Confirm in Wallet' : 'Confirm Purchase'}
+              </Button>
+              <p className="text-[10px] text-muted-foreground text-center">
+                {authMethod === 'wallet'
+                  ? 'MetaMask will open to sign the transaction'
+                  : 'ETH will be sent from your game wallet to treasury'}
+              </p>
+            </>
+          )}
+
+          {status === 'signing' && (
+            <div className="text-center space-y-3 py-2">
+              <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" />
+              <p className="text-sm font-medium">Waiting for wallet signature...</p>
+              <p className="text-xs text-muted-foreground">Confirm the transaction in MetaMask</p>
+            </div>
+          )}
+
+          {status === 'confirming' && (
+            <div className="text-center space-y-3 py-2">
+              <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto" />
+              <p className="text-sm font-medium">Confirming on {CHAIN_NAME}...</p>
+              <p className="text-xs text-muted-foreground">Waiting for network confirmation</p>
+            </div>
+          )}
+
+          {status === 'success' && (
+            <div className="text-center space-y-3 py-2">
+              <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto">
+                <Check className="w-6 h-6 text-emerald-400" />
+              </div>
+              <p className="text-sm font-medium text-emerald-400">Purchase Complete!</p>
+              <p className="text-xs text-muted-foreground">{board.name} has been added to your collection</p>
+              <Button variant="outline" size="sm" onClick={onClose}>Done</Button>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div className="text-center space-y-3 py-2">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto">
+                <AlertTriangle className="w-6 h-6 text-red-400" />
+              </div>
+              <p className="text-sm font-medium text-red-400">Purchase Failed</p>
+              <p className="text-xs text-muted-foreground">{error || 'Something went wrong. No ETH was deducted.'}</p>
+              <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Main Shop Component ───────────────────────────────
 export default function Shop() {
-  const { boards, buyBoard, balance, walletBalance, authMethod, setScreen } = useGameStore();
+  const {
+    boards, buyBoard, balance, walletBalance, authMethod,
+    setScreen, purchaseStatus, purchaseError,
+  } = useGameStore();
   const [activeFilter, setActiveFilter] = useState<string>('all');
+  const [selectedBoard, setSelectedBoard] = useState<Board | null>(null);
+  const [modalStatus, setModalStatus] = useState<'confirm' | 'signing' | 'confirming' | 'success' | 'error'>('confirm');
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [buyingBoardId, setBuyingBoardId] = useState<string | null>(null);
+
+  // Wagmi: send transaction (for wallet users only)
+  const { sendTransactionAsync } = useSendTransaction();
 
   const effectiveBalance = authMethod === 'wallet' ? walletBalance : balance;
+
+  const handleBuyClick = useCallback((board: Board) => {
+    setSelectedBoard(board);
+    setModalStatus('confirm');
+    setModalError(null);
+  }, []);
+
+  const handleConfirmPurchase = useCallback(async () => {
+    if (!selectedBoard) return;
+
+    setBuyingBoardId(selectedBoard.id);
+    let txHash: string | undefined;
+
+    try {
+      // ── Step 1: For wallet users, sign MetaMask transaction first ──
+      if (authMethod === 'wallet' && selectedBoard.price > 0) {
+        setModalStatus('signing');
+        try {
+          const hash = await sendTransactionAsync({
+            to: TREASURY_ADDRESS as `0x${string}`,
+            value: parseEther(selectedBoard.price.toString()),
+            chainId: ACTIVE_CHAIN.id,
+          });
+          txHash = hash;
+          setModalStatus('confirming');
+        } catch (err: any) {
+          // User rejected or MetaMask error
+          const msg = err?.shortMessage || err?.message || 'Transaction rejected';
+          setModalStatus('error');
+          setModalError(msg.includes('User rejected') ? 'Transaction rejected by user' : msg);
+          setBuyingBoardId(null);
+          return;
+        }
+      } else {
+        // Email users — backend handles the on-chain transfer
+        setModalStatus('confirming');
+      }
+
+      // ── Step 2: Call backend API to record purchase ──
+      // For wallet users, pass the txHash from MetaMask
+      // For email users, backend sends ETH from game wallet
+      const result = await buyBoard(selectedBoard.id, txHash);
+
+      if (result.success) {
+        setModalStatus('success');
+      } else {
+        setModalStatus('error');
+        setModalError(result.error || 'Purchase failed on server');
+      }
+    } catch (err: any) {
+      setModalStatus('error');
+      setModalError(err?.message || 'Unexpected error');
+    } finally {
+      setBuyingBoardId(null);
+    }
+  }, [selectedBoard, authMethod, sendTransactionAsync, buyBoard]);
+
+  const handleCloseModal = useCallback(() => {
+    setSelectedBoard(null);
+    setBuyingBoardId(null);
+    setModalStatus('confirm');
+    setModalError(null);
+  }, []);
 
   const filteredBoards = activeFilter === 'all'
     ? boards
@@ -149,8 +358,9 @@ export default function Shop() {
             <BoardCard
               key={board.id}
               board={board}
-              onBuy={() => buyBoard(board.id)}
+              onBuy={() => handleBuyClick(board)}
               canAfford={effectiveBalance >= board.price}
+              isBuying={buyingBoardId === board.id}
             />
           ))}
         </div>
@@ -161,6 +371,18 @@ export default function Shop() {
           </div>
         )}
       </div>
+
+      {/* Purchase Confirmation Modal */}
+      {selectedBoard && (
+        <PurchaseModal
+          board={selectedBoard}
+          status={modalStatus}
+          error={modalError}
+          onConfirm={handleConfirmPurchase}
+          onClose={handleCloseModal}
+          authMethod={authMethod || 'email'}
+        />
+      )}
     </div>
   );
 }

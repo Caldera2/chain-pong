@@ -80,7 +80,10 @@ interface GameStore {
 
   // Boards
   boards: Board[];
-  buyBoard: (id: string) => void;
+  buyBoard: (id: string, walletTxHash?: string) => Promise<{ success: boolean; error?: string }>;
+  purchaseStatus: 'idle' | 'signing' | 'confirming' | 'success' | 'error';
+  purchaseError: string | null;
+  setPurchaseStatus: (status: 'idle' | 'signing' | 'confirming' | 'success' | 'error', error?: string) => void;
 
   // Game State
   screen: 'splash' | 'login' | 'signup' | 'forgot-password' | 'lobby' | 'mode-select' | 'matchmaking' | 'game' | 'result' | 'leaderboard' | 'shop' | 'profile' | 'withdraw' | 'deposit' | 'transactions' | 'tutorial' | 'referral';
@@ -1584,25 +1587,51 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setSelectedBoard: (id) => set({ selectedBoard: id }),
 
   boards: initialBoards,
-  buyBoard: (id) =>
-    set((state) => {
+  purchaseStatus: 'idle',
+  purchaseError: null,
+  setPurchaseStatus: (status, error) => set({ purchaseStatus: status, purchaseError: error || null }),
+
+  buyBoard: async (id, walletTxHash?) => {
+    const state = get();
+    const board = state.boards.find((b) => b.id === id);
+    if (!board) return { success: false, error: 'Board not found' };
+    if (board.owned) return { success: false, error: 'Already owned' };
+
+    set({ purchaseStatus: 'confirming', purchaseError: null });
+
+    try {
+      // Call the backend API — this handles:
+      // 1. Balance verification
+      // 2. On-chain ETH transfer (for email/game-wallet users)
+      // 3. DB ownership record + transaction log
+      // For wallet users, pass the txHash from MetaMask signing
+      const result = await apiPurchaseBoard(id, walletTxHash);
+
+      if (!result.success) {
+        set({ purchaseStatus: 'error', purchaseError: result.error || 'Purchase failed' });
+        return { success: false, error: result.error };
+      }
+
+      // Only update local state AFTER server confirms
       const newBoards = state.boards.map((b) => (b.id === id ? { ...b, owned: true } : b));
-      const ownedIds = newBoards.filter((b) => b.owned).map((b) => b.id);
-      const updated = {
-        wins: state.wins,
-        losses: state.losses,
-        gamesPlayed: state.gamesPlayed,
-        totalEarnings: state.totalEarnings,
-        totalLost: state.totalLost,
-        usedPerks: state.usedPerks,
-        ownedBoards: ownedIds,
-      };
-      saveStats(updated);
-      return {
+      const price = board.price;
+      set({
         boards: newBoards,
-        balance: state.balance - (state.boards.find((b) => b.id === id)?.price || 0),
-      };
-    }),
+        balance: state.balance - price,
+        purchaseStatus: 'success',
+        purchaseError: null,
+      });
+
+      // Reset status after a moment
+      setTimeout(() => set({ purchaseStatus: 'idle' }), 2000);
+      return { success: true };
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Purchase failed';
+      set({ purchaseStatus: 'error', purchaseError: errorMsg });
+      setTimeout(() => set({ purchaseStatus: 'idle', purchaseError: null }), 4000);
+      return { success: false, error: errorMsg };
+    }
+  },
 
   screen: 'splash',
   setScreen: (screen) => set({ screen }),
