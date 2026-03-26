@@ -1,99 +1,80 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { useGameStore, Board } from '@/lib/store';
 import { IS_TESTNET, CHAIN_NAME, TOKEN_SYMBOL } from '@/lib/wagmi';
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { ArrowLeft, Check, Wallet, Lock } from 'lucide-react';
 
-const rarityColors: Record<string, { text: string; bg: string; border: string; glow: string }> = {
-  common: { text: 'text-gray-400', bg: 'bg-gray-400/10', border: 'border-gray-400/20', glow: '' },
-  rare: { text: 'text-blue-400', bg: 'bg-blue-400/10', border: 'border-blue-400/20', glow: 'shadow-[0_0_15px_rgba(59,130,246,0.1)]' },
-  epic: { text: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20', glow: 'shadow-[0_0_15px_rgba(168,85,247,0.1)]' },
-  legendary: { text: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/20', glow: 'shadow-[0_0_20px_rgba(234,179,8,0.1)]' },
+const RARITY_STYLES: Record<string, { label: string; text: string; border: string; bg: string }> = {
+  common:    { label: 'Common',    text: 'text-zinc-400',   border: 'border-zinc-500/20', bg: 'bg-zinc-500/10' },
+  rare:      { label: 'Rare',      text: 'text-blue-400',   border: 'border-blue-500/20', bg: 'bg-blue-500/10' },
+  epic:      { label: 'Epic',      text: 'text-violet-400', border: 'border-violet-500/20', bg: 'bg-violet-500/10' },
+  legendary: { label: 'Legendary', text: 'text-amber-400',  border: 'border-amber-500/20', bg: 'bg-amber-500/10' },
 };
 
-const rarityOrder = ['common', 'rare', 'epic', 'legendary'];
-
 function BoardCard({ board, onBuy, canAfford }: { board: Board; onBuy: () => void; canAfford: boolean }) {
-  const rc = rarityColors[board.rarity];
+  const rs = RARITY_STYLES[board.rarity] || RARITY_STYLES.common;
 
   return (
-    <motion.div
-      className={`glass rounded-2xl overflow-hidden card-shine group flex flex-col ${rc.glow}`}
-      whileHover={{ y: -4, scale: 1.01 }}
-      transition={{ type: 'spring', stiffness: 300 }}
-    >
-      {/* Board Preview — fixed height */}
+    <Card className="group flex flex-col overflow-hidden hover:border-border/80 transition-colors">
+      {/* Preview */}
       <div
-        className="h-36 sm:h-40 relative flex items-center justify-center shrink-0"
-        style={{ background: `linear-gradient(135deg, ${board.color}12, ${board.color}05)` }}
+        className="h-32 sm:h-36 relative flex items-center justify-center shrink-0"
+        style={{ background: `linear-gradient(145deg, ${board.color}10, ${board.color}05)` }}
       >
-        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ background: `radial-gradient(circle at center, ${board.color}15, transparent)` }}
-        />
-        <span className="text-5xl sm:text-6xl">{board.perkIcon}</span>
-
-        {/* Rarity badge */}
-        <span className={`absolute top-3 right-3 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${rc.text} ${rc.bg} ${rc.border}`}>
-          {board.rarity}
-        </span>
-
-        {/* Owned badge */}
+        <span className="text-4xl sm:text-5xl select-none">{board.perkIcon}</span>
+        <Badge className={`absolute top-2.5 right-2.5 ${rs.text} ${rs.bg} ${rs.border} text-[9px]`} variant="outline">
+          {rs.label}
+        </Badge>
         {board.owned && (
-          <span className="absolute top-3 left-3 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border border-mint/30 bg-mint/10 text-mint">
+          <Badge className="absolute top-2.5 left-2.5 text-[9px] border-emerald-500/30 bg-emerald-500/10 text-emerald-400" variant="outline">
             Owned
-          </span>
+          </Badge>
         )}
       </div>
 
-      {/* Info — flex-grow to equalize */}
-      <div className="p-4 sm:p-5 flex flex-col flex-1">
-        <h3 className="text-base sm:text-lg font-bold text-white mb-1">{board.name}</h3>
+      {/* Info */}
+      <CardContent className="p-3.5 sm:p-4 flex flex-col flex-1">
+        <h3 className="font-heading text-sm sm:text-base font-semibold mb-0.5">{board.name}</h3>
+        <p className="text-xs font-medium mb-1.5" style={{ color: board.color }}>{board.perk}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed mb-3 flex-1">{board.perkDescription}</p>
 
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs sm:text-sm font-medium" style={{ color: board.color }}>
-            {board.perk}
-          </span>
-        </div>
-        <p className="text-xs sm:text-sm text-gray-500 mb-4 leading-relaxed flex-1">{board.perkDescription}</p>
-
-        {/* Price & Action */}
         {board.owned ? (
-          <div className="w-full py-2.5 rounded-xl bg-mint/8 text-mint text-center font-semibold text-sm border border-mint/15">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="inline mr-1.5 -mt-0.5"><path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Owned
+          <div className="flex items-center justify-center gap-1.5 py-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] text-emerald-400 text-xs font-medium">
+            <Check className="w-3.5 h-3.5" /> Owned
           </div>
         ) : board.price === 0 ? (
-          <div className="w-full py-2.5 rounded-xl bg-white/5 text-gray-400 text-center font-semibold text-sm border border-white/5">
+          <div className="py-2 rounded-lg border border-border text-center text-xs text-muted-foreground font-medium">
             Free
           </div>
         ) : (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-500">Price</span>
-              <span className={`text-sm font-bold ${canAfford ? 'text-gold' : 'text-red-400/70'}`}>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Price</span>
+              <span className={`font-semibold ${canAfford ? 'text-primary' : 'text-red-400/70'}`}>
                 {board.price} {TOKEN_SYMBOL}
               </span>
             </div>
-            <button
+            <Button
+              size="sm"
+              className="w-full"
               onClick={onBuy}
               disabled={!canAfford}
-              className={`w-full py-2.5 rounded-xl font-semibold text-sm transition-all ${
-                canAfford
-                  ? 'btn-primary hover:scale-[1.02]'
-                  : 'bg-red-500/5 text-red-400/60 cursor-not-allowed border border-red-500/10'
-              }`}
+              variant={canAfford ? 'default' : 'outline'}
             >
               {canAfford ? (
-                <>Buy for {board.price} {TOKEN_SYMBOL}</>
+                <>Buy</>
               ) : (
-                <>Insufficient Funds</>
+                <><Lock className="w-3 h-3" /> Insufficient</>
               )}
-            </button>
+            </Button>
           </div>
         )}
-      </div>
-    </motion.div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -103,13 +84,11 @@ export default function Shop() {
 
   const effectiveBalance = authMethod === 'wallet' ? walletBalance : balance;
 
-  // Filter boards by rarity
   const filteredBoards = activeFilter === 'all'
     ? boards
     : boards.filter((b) => b.rarity === activeFilter);
 
-  // Count per rarity
-  const countByRarity = {
+  const countByRarity: Record<string, number> = {
     all: boards.length,
     common: boards.filter(b => b.rarity === 'common').length,
     rare: boards.filter(b => b.rarity === 'rare').length,
@@ -117,92 +96,70 @@ export default function Shop() {
     legendary: boards.filter(b => b.rarity === 'legendary').length,
   };
 
-  return (
-    <div className="min-h-screen gradient-bg pt-16 sm:pt-20 pb-20 sm:pb-24 px-3 sm:px-4">
-      <div className="max-w-6xl mx-auto">
-        <motion.div
-          className="text-center mb-6 sm:mb-8"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <h1 className="text-2xl sm:text-4xl font-bold text-white mb-1 sm:mb-2 tracking-tight">Skill Shop</h1>
-          <p className="text-gray-500 text-sm sm:text-base">Each board comes with a unique perk to give you an edge</p>
-          <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-            <div className="inline-flex items-center gap-2 glass-elevated rounded-full px-4 py-1.5 text-sm">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" className="text-gold"/></svg>
-              <span className="text-gray-500">Balance:</span>
-              <span className="text-gold font-bold">{effectiveBalance.toFixed(4)} {TOKEN_SYMBOL}</span>
-            </div>
-            {IS_TESTNET && (
-              <span className="text-[10px] px-2.5 py-1 rounded-full bg-yellow-500/8 text-yellow-500/60 border border-yellow-500/15 font-medium tracking-wider uppercase">
-                {CHAIN_NAME}
-              </span>
-            )}
-          </div>
-        </motion.div>
+  const filters = [
+    { key: 'all', label: 'All' },
+    { key: 'common', label: 'Common' },
+    { key: 'rare', label: 'Rare' },
+    { key: 'epic', label: 'Epic' },
+    { key: 'legendary', label: 'Legendary' },
+  ];
 
-        {/* Rarity Filters */}
-        <motion.div
-          className="flex flex-wrap gap-2 justify-center mb-6 sm:mb-8"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.1 }}
-        >
-          {[
-            { key: 'all', label: 'All', color: 'text-white' },
-            { key: 'common', label: 'Common', color: 'text-gray-400' },
-            { key: 'rare', label: 'Rare', color: 'text-blue-400' },
-            { key: 'epic', label: 'Epic', color: 'text-purple-400' },
-            { key: 'legendary', label: 'Legendary', color: 'text-yellow-400' },
-          ].map((filter) => (
+  return (
+    <div className="min-h-screen bg-background pt-16 sm:pt-20 pb-24 px-4">
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* Header */}
+        <div>
+          <button onClick={() => setScreen('lobby')} className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 mb-3">
+            <ArrowLeft className="w-3 h-3" /> Back
+          </button>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">Skill Shop</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">Boards with unique perks to give you an edge</p>
+            </div>
+            <div className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5">
+              <Wallet className="w-3.5 h-3.5 text-primary" />
+              <span className="font-semibold text-primary">{effectiveBalance.toFixed(4)}</span>
+              <span className="text-muted-foreground text-xs">{TOKEN_SYMBOL}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="flex gap-1.5 flex-wrap">
+          {filters.map((f) => (
             <button
-              key={filter.key}
-              onClick={() => setActiveFilter(filter.key)}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all border ${
-                activeFilter === filter.key
-                  ? `${filter.color} bg-white/8 border-white/15`
-                  : 'text-gray-600 bg-white/[0.02] border-white/5 hover:bg-white/5 hover:text-gray-300'
+              key={f.key}
+              onClick={() => setActiveFilter(f.key)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border ${
+                activeFilter === f.key
+                  ? 'border-primary/30 bg-primary/[0.06] text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'
               }`}
             >
-              {filter.label}
-              <span className="ml-1.5 text-[10px] opacity-50">{countByRarity[filter.key as keyof typeof countByRarity]}</span>
+              {f.label}
+              <span className="ml-1 opacity-50">{countByRarity[f.key]}</span>
             </button>
           ))}
-        </motion.div>
+        </div>
 
-        {/* Board Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5">
-          {filteredBoards.map((board, i) => (
-            <motion.div
+        {/* Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {filteredBoards.map((board) => (
+            <BoardCard
               key={board.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04 }}
-            >
-              <BoardCard
-                board={board}
-                onBuy={() => buyBoard(board.id)}
-                canAfford={effectiveBalance >= board.price}
-              />
-            </motion.div>
+              board={board}
+              onBuy={() => buyBoard(board.id)}
+              canAfford={effectiveBalance >= board.price}
+            />
           ))}
         </div>
 
         {filteredBoards.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-600 text-sm">No boards in this category</p>
+          <div className="text-center py-16">
+            <p className="text-muted-foreground text-sm">No boards in this category</p>
           </div>
         )}
-
-        <motion.button
-          onClick={() => setScreen('lobby')}
-          className="mt-10 text-gray-600 hover:text-white transition-colors mx-auto block text-sm"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.3 }}
-        >
-          ← Back to Lobby
-        </motion.button>
       </div>
     </div>
   );

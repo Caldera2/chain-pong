@@ -1,10 +1,17 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
 import { useState, useEffect, useCallback } from 'react';
 import { CHAIN_NAME, IS_TESTNET, TOKEN_SYMBOL } from '@/lib/wagmi';
 import { apiSyncDeposits } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import {
+  ArrowLeft, Copy, Check, RefreshCw, Loader2, ArrowDownToLine,
+  AlertTriangle, ExternalLink, Wallet
+} from 'lucide-react';
 
 export default function Deposit() {
   const { gameWallet, setScreen, balance, setBalance } = useGameStore();
@@ -20,8 +27,6 @@ export default function Deposit() {
     if (!walletAddress) return;
     try {
       await navigator.clipboard.writeText(walletAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
       const el = document.createElement('textarea');
       el.value = walletAddress;
@@ -29,9 +34,9 @@ export default function Deposit() {
       el.select();
       document.execCommand('copy');
       document.body.removeChild(el);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const syncDeposits = useCallback(async () => {
@@ -57,146 +62,136 @@ export default function Deposit() {
     }
   }, [syncing, setBalance]);
 
-  // Poll for deposits every 15 seconds while on this screen
   useEffect(() => {
-    syncDeposits(); // initial sync
+    syncDeposits();
     const interval = setInterval(syncDeposits, 15000);
     return () => clearInterval(interval);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="min-h-screen gradient-bg pt-16 sm:pt-20 pb-20 sm:pb-24 px-3 sm:px-4">
-      <div className="max-w-lg mx-auto">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          {/* Header */}
-          <div className="text-center mb-6 sm:mb-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-gold/20 to-gold/5 border border-gold/20 mx-auto mb-4 flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2L12 22M12 2L6 8M12 2L18 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gold" />
-              </svg>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Deposit Funds</h1>
-            <p className="text-gray-500 text-sm">Send {TOKEN_SYMBOL} to your game wallet to start playing</p>
+    <div className="min-h-screen bg-background pt-16 sm:pt-20 pb-24 px-4">
+      <div className="max-w-lg mx-auto space-y-4">
+        {/* Header */}
+        <div>
+          <button onClick={() => setScreen('profile')} className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 mb-3">
+            <ArrowLeft className="w-3 h-3" /> Back
+          </button>
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">Deposit Funds</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Send {TOKEN_SYMBOL} to your game wallet to start playing</p>
+        </div>
+
+        {/* Deposit Detected Banner */}
+        {depositDetected && (
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3 text-center">
+            <p className="text-emerald-400 text-sm font-medium">Deposit detected! Your balance has been updated.</p>
           </div>
+        )}
 
-          {/* Deposit Detected Banner */}
-          {depositDetected && (
-            <motion.div
-              className="bg-mint/10 border border-mint/20 rounded-xl px-4 py-3 mb-4 text-center"
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <p className="text-mint text-sm font-medium">Deposit detected! Your balance has been updated.</p>
-            </motion.div>
-          )}
-
-          {/* Wallet Address Card */}
-          <div className="glass rounded-2xl p-5 sm:p-6 mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Your Game Wallet</h3>
-              <span className="text-xs px-2.5 py-1 rounded-full bg-mint/10 text-mint font-medium">
-                Active
-              </span>
+        {/* Wallet Address */}
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-primary" /> Your Game Wallet
+              </h3>
+              <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400">Active</Badge>
             </div>
 
-            <div
+            <button
               onClick={copyAddress}
-              className="group relative bg-white/[0.03] border border-white/10 hover:border-gold/30 rounded-xl p-4 cursor-pointer transition-all"
+              className="w-full text-left rounded-lg border border-border hover:border-primary/30 p-4 transition-colors group"
             >
-              <div className="text-xs text-gray-500 mb-2">Address</div>
-              <div className="font-mono text-sm sm:text-base text-white break-all leading-relaxed">
-                {walletAddress}
-              </div>
-              <div className="absolute top-3 right-3">
-                <motion.div
-                  className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${
-                    copied
-                      ? 'bg-mint/10 text-mint border border-mint/20'
-                      : 'bg-white/5 text-gray-500 border border-white/10 group-hover:text-gold-light group-hover:border-gold/20'
-                  }`}
-                  animate={copied ? { scale: [1, 1.1, 1] } : {}}
-                >
-                  {copied ? 'Copied!' : 'Copy'}
-                </motion.div>
-              </div>
-            </div>
-          </div>
-
-          {/* Network Info */}
-          <div className="glass rounded-2xl p-5 sm:p-6 mb-4">
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Network Details</h3>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-400">Network</span>
-                <span className="text-sm text-white font-medium flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
-                  {CHAIN_NAME}
-                  {IS_TESTNET && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400 font-medium">TESTNET</span>
-                  )}
+              <p className="text-[10px] text-muted-foreground mb-1.5">Address</p>
+              <p className="font-mono text-sm break-all leading-relaxed">{walletAddress}</p>
+              <div className="flex justify-end mt-2">
+                <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md transition-colors ${
+                  copied
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-muted text-muted-foreground group-hover:text-primary'
+                }`}>
+                  {copied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy</>}
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-400">Token</span>
-                <span className="text-sm text-white font-medium">{TOKEN_SYMBOL}</span>
+            </button>
+          </CardContent>
+        </Card>
+
+        {/* Network Details */}
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <h3 className="text-sm font-semibold">Network Details</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Network</span>
+                <span className="font-medium flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  {CHAIN_NAME}
+                  {IS_TESTNET && <Badge variant="outline" className="text-[8px] border-yellow-500/30 text-yellow-500 ml-1">TESTNET</Badge>}
+                </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-400">Game Balance</span>
-                <span className="text-sm text-gold font-bold">{balance.toFixed(4)} {TOKEN_SYMBOL}</span>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Token</span>
+                <span className="font-medium">{TOKEN_SYMBOL}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Game Balance</span>
+                <span className="text-primary font-semibold">{balance.toFixed(4)} {TOKEN_SYMBOL}</span>
               </div>
               {onChainBalance && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">On-Chain Balance</span>
-                  <span className="text-sm text-mint font-bold">{parseFloat(onChainBalance).toFixed(4)} {TOKEN_SYMBOL}</span>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">On-Chain Balance</span>
+                  <span className="text-emerald-400 font-semibold">{parseFloat(onChainBalance).toFixed(4)} {TOKEN_SYMBOL}</span>
                 </div>
               )}
             </div>
 
-            {/* Refresh Button */}
-            <button
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
               onClick={syncDeposits}
               disabled={syncing}
-              className="mt-4 w-full py-2.5 rounded-xl text-sm font-semibold transition-all bg-white/[0.03] border border-white/10 hover:border-gold/30 text-gray-400 hover:text-white flex items-center justify-center gap-2"
             >
               {syncing ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
-                  Checking for deposits...
-                </>
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking for deposits...</>
               ) : (
                 <>
-                  Refresh Balance
-                  {lastSync && <span className="text-[10px] text-gray-600 ml-1">(last: {lastSync})</span>}
+                  <RefreshCw className="w-3.5 h-3.5" /> Refresh Balance
+                  {lastSync && <span className="text-[10px] text-muted-foreground ml-1">(last: {lastSync})</span>}
                 </>
               )}
-            </button>
-          </div>
+            </Button>
+          </CardContent>
+        </Card>
 
-          {/* Instructions */}
-          <div className="glass rounded-2xl p-5 sm:p-6 mb-6">
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">How to Deposit</h3>
+        {/* Instructions */}
+        <Card>
+          <CardContent className="p-5">
+            <h3 className="text-sm font-semibold mb-4">How to Deposit</h3>
             <div className="space-y-3">
               {[
-                { step: '1', text: `Copy your game wallet address above` },
-                { step: '2', text: `Open your external wallet (MetaMask, Coinbase, etc.)` },
-                { step: '3', text: `Send ${TOKEN_SYMBOL} on ${CHAIN_NAME} to the address` },
-                { step: '4', text: `Click "Refresh Balance" or wait — deposits are auto-detected` },
-              ].map((item) => (
-                <div key={item.step} className="flex items-start gap-3">
-                  <div className="w-6 h-6 rounded-full bg-gold/10 border border-gold/20 flex items-center justify-center shrink-0 mt-0.5">
-                    <span className="text-xs text-gold font-bold">{item.step}</span>
+                'Copy your game wallet address above',
+                'Open your external wallet (MetaMask, Coinbase, etc.)',
+                `Send ${TOKEN_SYMBOL} on ${CHAIN_NAME} to the address`,
+                'Click "Refresh Balance" or wait — deposits are auto-detected',
+              ].map((text, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="text-xs text-primary font-bold">{i + 1}</span>
                   </div>
-                  <p className="text-sm text-gray-300 leading-relaxed">{item.text}</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{text}</p>
                 </div>
               ))}
             </div>
-          </div>
+          </CardContent>
+        </Card>
 
-          {/* Testnet Faucet Links */}
-          {IS_TESTNET && (
-            <div className="glass rounded-2xl p-5 sm:p-6 mb-4">
-              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Get Free Testnet ETH</h3>
-              <p className="text-xs text-gray-500 mb-3">Need testnet {TOKEN_SYMBOL}? Get some for free from these faucets:</p>
+        {/* Testnet Faucets */}
+        {IS_TESTNET && (
+          <Card>
+            <CardContent className="p-5">
+              <h3 className="text-sm font-semibold mb-2">Get Free Testnet ETH</h3>
+              <p className="text-xs text-muted-foreground mb-3">Need testnet {TOKEN_SYMBOL}? Get some for free:</p>
               <div className="space-y-2">
                 {[
                   { name: 'Alchemy Faucet', url: 'https://www.alchemy.com/faucets/base-sepolia' },
@@ -208,39 +203,27 @@ export default function Deposit() {
                     href={faucet.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between bg-white/[0.03] border border-white/8 rounded-xl px-4 py-2.5 hover:border-gold/30 transition-all group"
+                    className="flex items-center justify-between rounded-lg border border-border px-4 py-2.5 hover:border-primary/30 transition-colors group"
                   >
-                    <span className="text-sm text-gray-300 group-hover:text-white transition-colors">{faucet.name}</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-gray-600 group-hover:text-gold transition-colors">
-                      <path d="M7 17L17 7M17 7H7M17 7V17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
+                    <span className="text-sm text-muted-foreground group-hover:text-foreground transition-colors">{faucet.name}</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
                   </a>
                 ))}
               </div>
-            </div>
-          )}
+            </CardContent>
+          </Card>
+        )}
 
-          {/* Warning */}
-          <div className="bg-yellow-500/5 border border-yellow-500/15 rounded-xl px-4 py-3 mb-6">
-            <div className="flex items-start gap-2.5">
-              <span className="text-yellow-400 mt-0.5 shrink-0">!</span>
-              <p className="text-xs text-yellow-400/80 leading-relaxed">
-                Only send <strong className="text-yellow-400">{TOKEN_SYMBOL}</strong> on the <strong className="text-yellow-400">{CHAIN_NAME}</strong> network.
-                Sending other tokens or using a different network may result in permanent loss of funds.
-              </p>
-            </div>
+        {/* Warning */}
+        <div className="bg-yellow-500/5 border border-yellow-500/15 rounded-lg px-4 py-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-yellow-400/80 leading-relaxed">
+              Only send <strong className="text-yellow-400">{TOKEN_SYMBOL}</strong> on the <strong className="text-yellow-400">{CHAIN_NAME}</strong> network.
+              Sending other tokens or using a different network may result in permanent loss of funds.
+            </p>
           </div>
-
-          {/* Back Button */}
-          <motion.button
-            onClick={() => setScreen('profile')}
-            className="text-gray-500 hover:text-white transition-colors mx-auto block text-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            Back to Profile
-          </motion.button>
-        </motion.div>
+        </div>
       </div>
     </div>
   );

@@ -1,10 +1,17 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
 import { useState, useEffect } from 'react';
 import { TOKEN_SYMBOL, BLOCK_EXPLORER } from '@/lib/wagmi';
 import { apiGetTransactions } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  ArrowLeft, ArrowDownToLine, ArrowUpRight, Trophy, Lock, Undo2,
+  ShoppingBag, Zap, FileText, Loader2, ChevronLeft, ChevronRight,
+  ExternalLink
+} from 'lucide-react';
 
 interface Transaction {
   id: string;
@@ -17,14 +24,14 @@ interface Transaction {
   confirmedAt: string | null;
 }
 
-const TYPE_CONFIG: Record<string, { label: string; color: string; icon: string; sign: '+' | '-' | '' }> = {
-  DEPOSIT: { label: 'Deposit', color: 'text-mint', icon: '↓', sign: '+' },
-  WITHDRAWAL: { label: 'Withdrawal', color: 'text-coral', icon: '↑', sign: '-' },
-  PAYOUT: { label: 'Match Win', color: 'text-gold', icon: '★', sign: '+' },
-  STAKE_LOCK: { label: 'Stake Locked', color: 'text-yellow-400', icon: '🔒', sign: '-' },
-  STAKE_RETURN: { label: 'Stake Returned', color: 'text-lavender', icon: '↩', sign: '+' },
-  BOARD_PURCHASE: { label: 'Board Purchase', color: 'text-purple-400', icon: '🛒', sign: '-' },
-  PROTOCOL_FEE: { label: 'Match Fee', color: 'text-gray-500', icon: '⚡', sign: '-' },
+const TYPE_CONFIG: Record<string, { label: string; Icon: typeof Trophy; colorClass: string; sign: '+' | '-' | '' }> = {
+  DEPOSIT:        { label: 'Deposit',        Icon: ArrowDownToLine, colorClass: 'text-emerald-400', sign: '+' },
+  WITHDRAWAL:     { label: 'Withdrawal',     Icon: ArrowUpRight,    colorClass: 'text-red-400',     sign: '-' },
+  PAYOUT:         { label: 'Match Win',      Icon: Trophy,          colorClass: 'text-amber-400',   sign: '+' },
+  STAKE_LOCK:     { label: 'Stake Locked',   Icon: Lock,            colorClass: 'text-yellow-400',  sign: '-' },
+  STAKE_RETURN:   { label: 'Stake Returned', Icon: Undo2,           colorClass: 'text-violet-400',  sign: '+' },
+  BOARD_PURCHASE: { label: 'Board Purchase', Icon: ShoppingBag,     colorClass: 'text-purple-400',  sign: '-' },
+  PROTOCOL_FEE:   { label: 'Match Fee',      Icon: Zap,             colorClass: 'text-muted-foreground', sign: '-' },
 };
 
 export default function TransactionHistory() {
@@ -61,73 +68,76 @@ export default function TransactionHistory() {
   };
 
   return (
-    <div className="min-h-screen gradient-bg pt-16 sm:pt-20 pb-20 sm:pb-24 px-3 sm:px-4">
-      <div className="max-w-lg mx-auto">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          {/* Header */}
-          <div className="text-center mb-6 sm:mb-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-lavender/20 to-lavender/5 border border-lavender/20 mx-auto mb-4 flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                <path d="M9 5H7C5.89543 5 5 5.89543 5 7V19C5 20.1046 5.89543 21 7 21H17C18.1046 21 19 20.1046 19 19V7C19 5.89543 18.1046 5 17 5H15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-lavender" />
-                <path d="M9 5C9 3.89543 9.89543 3 11 3H13C14.1046 3 15 3.89543 15 5C15 6.10457 14.1046 7 13 7H11C9.89543 7 9 6.10457 9 5Z" stroke="currentColor" strokeWidth="2" className="text-lavender" />
-                <path d="M9 12H15M9 16H13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-lavender" />
-              </svg>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Transaction History</h1>
-            <p className="text-gray-500 text-sm">All your deposits, withdrawals, and earnings</p>
-          </div>
+    <div className="min-h-screen bg-background pt-16 sm:pt-20 pb-24 px-4">
+      <div className="max-w-lg mx-auto space-y-4">
+        {/* Header */}
+        <div>
+          <button onClick={() => setScreen('profile')} className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 mb-3">
+            <ArrowLeft className="w-3 h-3" /> Back
+          </button>
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">Transaction History</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">All your deposits, withdrawals, and earnings</p>
+        </div>
 
-          {/* Transactions List */}
-          <div className="glass rounded-2xl p-4 sm:p-6 mb-4">
+        {/* Transactions */}
+        <Card>
+          <CardContent className="p-4 sm:p-5">
             {loading ? (
-              <div className="text-center py-8">
-                <span className="w-6 h-6 border-2 border-gold/30 border-t-gold rounded-full animate-spin inline-block" />
-                <p className="text-gray-500 text-sm mt-3">Loading transactions...</p>
+              <div className="text-center py-10">
+                <Loader2 className="w-6 h-6 text-primary animate-spin mx-auto" />
+                <p className="text-sm text-muted-foreground mt-3">Loading transactions...</p>
               </div>
             ) : transactions.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path d="M9 5H7C5.89543 5 5 5.89543 5 7V19C5 20.1046 5.89543 21 7 21H17C18.1046 21 19 20.1046 19 19V7C19 5.89543 18.1046 5 17 5H15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-gray-600" />
-                  </svg>
-                </div>
-                <p className="text-gray-500 text-sm">No transactions yet</p>
-                <p className="text-gray-600 text-xs mt-1">Play matches or deposit funds to get started</p>
+              <div className="text-center py-10">
+                <FileText className="w-10 h-10 text-muted-foreground/20 mx-auto mb-3" />
+                <h2 className="font-heading text-lg font-semibold mb-1">No Transactions Yet</h2>
+                <p className="text-sm text-muted-foreground">Play matches or deposit funds to get started</p>
               </div>
             ) : (
               <div className="space-y-2">
                 {transactions.map((tx) => {
-                  const config = TYPE_CONFIG[tx.type] || { label: tx.type, color: 'text-gray-400', icon: '•', sign: '' };
+                  const config = TYPE_CONFIG[tx.type] || { label: tx.type, Icon: Zap, colorClass: 'text-muted-foreground', sign: '' as const };
+                  const IconComp = config.Icon;
                   return (
-                    <div key={tx.id} className="flex items-center justify-between bg-white/[0.03] border border-white/5 rounded-xl px-4 py-3 hover:border-white/10 transition-all">
+                    <div
+                      key={tx.id}
+                      className="flex items-center justify-between rounded-lg border border-border px-4 py-3 hover:bg-muted/30 transition-colors"
+                    >
                       <div className="flex items-center gap-3 min-w-0">
-                        <span className="text-lg shrink-0">{config.icon}</span>
+                        <div className={`w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0`}>
+                          <IconComp className={`w-4 h-4 ${config.colorClass}`} />
+                        </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className={`text-sm font-medium ${config.color}`}>{config.label}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                              tx.status === 'CONFIRMED' ? 'bg-mint/10 text-mint' :
-                              tx.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-400' :
-                              'bg-red-500/10 text-red-400'
-                            }`}>
+                            <span className={`text-sm font-medium ${config.colorClass}`}>{config.label}</span>
+                            <Badge
+                              variant="outline"
+                              className={`text-[8px] ${
+                                tx.status === 'CONFIRMED' ? 'border-emerald-500/30 text-emerald-400' :
+                                tx.status === 'PENDING' ? 'border-yellow-500/30 text-yellow-400' :
+                                'border-red-500/30 text-red-400'
+                              }`}
+                            >
                               {tx.status}
-                            </span>
+                            </Badge>
                           </div>
-                          <div className="text-[10px] text-gray-600 mt-0.5">{formatDate(tx.createdAt)}</div>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">{formatDate(tx.createdAt)}</p>
                         </div>
                       </div>
                       <div className="text-right shrink-0 ml-3">
-                        <div className={`text-sm font-bold ${config.sign === '+' ? 'text-mint' : config.sign === '-' ? 'text-coral' : 'text-white'}`}>
+                        <p className={`text-sm font-semibold ${
+                          config.sign === '+' ? 'text-emerald-400' : config.sign === '-' ? 'text-red-400' : ''
+                        }`}>
                           {config.sign}{parseFloat(tx.amount).toFixed(4)} {TOKEN_SYMBOL}
-                        </div>
+                        </p>
                         {tx.txHash && (
                           <a
                             href={`${BLOCK_EXPLORER}/tx/${tx.txHash}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[10px] text-gold-light hover:text-gold transition-colors"
+                            className="inline-flex items-center gap-0.5 text-[10px] text-primary hover:underline"
                           >
-                            View tx
+                            View tx <ExternalLink className="w-2.5 h-2.5" />
                           </a>
                         )}
                       </div>
@@ -139,38 +149,30 @@ export default function TransactionHistory() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-center gap-3 mt-4 pt-4 border-t border-white/5">
-                <button
+              <div className="flex items-center justify-center gap-3 mt-4 pt-4 border-t border-border">
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setPage(Math.max(1, page - 1))}
                   disabled={page === 1}
-                  className="text-sm text-gray-500 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
-                  Previous
-                </button>
-                <span className="text-xs text-gray-600">
+                  <ChevronLeft className="w-4 h-4" /> Previous
+                </Button>
+                <span className="text-xs text-muted-foreground">
                   Page {page} of {totalPages}
                 </span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setPage(Math.min(totalPages, page + 1))}
                   disabled={page === totalPages}
-                  className="text-sm text-gray-500 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
-                  Next
-                </button>
+                  Next <ChevronRight className="w-4 h-4" />
+                </Button>
               </div>
             )}
-          </div>
-
-          {/* Back Button */}
-          <motion.button
-            onClick={() => setScreen('profile')}
-            className="text-gray-500 hover:text-white transition-colors mx-auto block text-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            Back to Profile
-          </motion.button>
-        </motion.div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

@@ -1,14 +1,15 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
 import { useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Trophy, ArrowLeft, Medal, Crown, Award } from 'lucide-react';
 
 export default function Leaderboard() {
   const { leaderboard, setScreen, username, wins, losses, totalEarnings, playerRank, isLoggedIn, fetchLeaderboard } = useGameStore();
 
-  // Fetch from backend on mount
   useEffect(() => {
     fetchLeaderboard();
   }, [fetchLeaderboard]);
@@ -16,218 +17,155 @@ export default function Leaderboard() {
   const hasPlayers = leaderboard.length > 0;
 
   return (
-    <div className="min-h-screen gradient-bg pt-16 sm:pt-20 pb-20 sm:pb-24 px-3 sm:px-4">
-      <div className="max-w-4xl mx-auto">
-        <motion.div
-          className="text-center mb-6 sm:mb-10"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <div className="inline-flex items-center gap-2 mb-3">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor" className="text-gold"/></svg>
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2 tracking-tight">Champion&apos;s Board</h1>
-          <p className="text-gray-500 text-sm sm:text-base">Ranked by wins — climb to the top</p>
-        </motion.div>
+    <div className="min-h-screen bg-background pt-16 sm:pt-20 pb-24 px-4">
+      <div className="max-w-3xl mx-auto space-y-6">
+        {/* Header */}
+        <div>
+          <button onClick={() => setScreen('lobby')} className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 mb-3">
+            <ArrowLeft className="w-3 h-3" /> Back
+          </button>
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">Leaderboard</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Ranked by total wins</p>
+        </div>
 
         {/* Empty State */}
         {!hasPlayers && (
-          <motion.div
-            className="glass-elevated rounded-2xl sm:rounded-3xl p-8 sm:p-14 text-center mb-6"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 rounded-full bg-gradient-to-br from-gold/10 to-gold/5 border border-gold/15 flex items-center justify-center">
-              <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-gold/50"/></svg>
-            </div>
-            <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">No Rankings Yet</h2>
-            <p className="text-gray-500 text-sm sm:text-base max-w-sm mx-auto mb-6">
-              The leaderboard is empty. Be the first player to compete and claim the #1 spot!
-            </p>
-            <button
-              onClick={() => setScreen('mode-select')}
-              className="btn-primary px-6 py-3 rounded-xl font-semibold text-sm sm:text-base"
-            >
-              Play Now
-            </button>
-          </motion.div>
+          <Card>
+            <CardContent className="py-16 text-center">
+              <Trophy className="w-10 h-10 text-muted-foreground/20 mx-auto mb-3" />
+              <h2 className="font-heading text-lg font-semibold mb-1">No Rankings Yet</h2>
+              <p className="text-sm text-muted-foreground mb-6 max-w-xs mx-auto">
+                Be the first player to compete and claim the top spot.
+              </p>
+              <Button onClick={() => setScreen('mode-select')}>Play Now</Button>
+            </CardContent>
+          </Card>
         )}
 
-        {/* Top 3 Podium — holographic trophies */}
+        {/* Top 3 Podium */}
         {leaderboard.length >= 3 && (
-          <motion.div
-            className="flex items-end justify-center gap-2 sm:gap-4 mb-8 sm:mb-10"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            {[leaderboard[1], leaderboard[0], leaderboard[2]].map((entry, i) => {
-              const heights = ['h-24 sm:h-28', 'h-30 sm:h-36', 'h-20 sm:h-24'];
-              const positions = ['2nd', '1st', '3rd'];
-              const holoClasses = ['holo-silver', 'holo-gold', 'holo-bronze'];
-              const borderColors = ['border-gray-400/20', 'border-yellow-500/25', 'border-amber-600/20'];
-              const bgColors = ['bg-gray-400/5', 'bg-yellow-500/8', 'bg-amber-600/5'];
-              const glowShadows = [
-                '0 0 30px rgba(156,163,175,0.05)',
-                '0 0 40px rgba(245,208,96,0.1)',
-                '0 0 30px rgba(217,119,6,0.05)',
-              ];
-              const isYou = entry.isPlayer;
-              return (
-                <div key={entry.rank} className="flex flex-col items-center">
-                  <span className="text-2xl sm:text-3xl mb-1 sm:mb-2">{entry.avatar}</span>
-                  <span className={`text-xs sm:text-sm font-bold mb-0.5 sm:mb-1 truncate max-w-[70px] sm:max-w-none ${isYou ? 'text-gold-light' : 'text-white'}`}>
-                    {entry.username}{isYou ? ' (You)' : ''}
-                  </span>
-                  <span className="text-[10px] sm:text-xs text-gray-500 mb-1 sm:mb-2">{entry.wins}W / {entry.losses}L</span>
-                  <div
-                    className={`w-20 sm:w-24 md:w-32 ${heights[i]} rounded-t-xl ${bgColors[i]} ${borderColors[i]} border border-b-0 flex flex-col items-center justify-center ${isYou ? 'ring-2 ring-gold/30' : ''}`}
-                    style={{ boxShadow: glowShadows[i] }}
-                  >
-                    <span className={`text-base sm:text-xl font-bold ${holoClasses[i]}`}>{positions[i]}</span>
-                    <span className="text-[10px] sm:text-xs text-gray-500 mt-0.5 sm:mt-1">{entry.earnings.toFixed(3)} {TOKEN_SYMBOL}</span>
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            {[
+              { entry: leaderboard[1], pos: '2nd', Icon: Medal, accent: 'text-zinc-300', accentBg: 'bg-zinc-400/10', accentBorder: 'border-zinc-400/20' },
+              { entry: leaderboard[0], pos: '1st', Icon: Crown, accent: 'text-amber-400', accentBg: 'bg-amber-400/10', accentBorder: 'border-amber-400/20' },
+              { entry: leaderboard[2], pos: '3rd', Icon: Award, accent: 'text-orange-400', accentBg: 'bg-orange-400/10', accentBorder: 'border-orange-400/20' },
+            ].map(({ entry, pos, Icon, accent, accentBg, accentBorder }) => (
+              <Card
+                key={entry.rank}
+                className={`text-center ${entry.isPlayer ? 'border-primary/20' : ''}`}
+              >
+                <CardContent className="p-3 sm:p-4">
+                  <div className={`w-8 h-8 rounded-lg ${accentBg} border ${accentBorder} mx-auto mb-2 flex items-center justify-center`}>
+                    <Icon className={`w-4 h-4 ${accent}`} />
                   </div>
-                </div>
-              );
-            })}
-          </motion.div>
+                  <span className="text-xl mb-1 block">{entry.avatar}</span>
+                  <p className={`text-xs sm:text-sm font-semibold truncate ${entry.isPlayer ? 'text-primary' : ''}`}>
+                    {entry.username}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{entry.wins}W / {entry.losses}L</p>
+                  <p className={`text-xs font-semibold mt-1 ${accent}`}>{pos}</p>
+                  <p className="text-[10px] text-muted-foreground">{entry.earnings.toFixed(3)} {TOKEN_SYMBOL}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         )}
 
-        {/* Your Rank Card — pinned with progress */}
-        {isLoggedIn && (
-          <motion.div
-            className="glass-glow-gold rounded-xl sm:rounded-2xl p-3 sm:p-5 mb-4 sm:mb-6"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 sm:gap-4">
-                <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gold/10 border border-gold/20 flex items-center justify-center text-gold-light font-bold text-sm sm:text-lg">
-                  {hasPlayers ? `#${playerRank}` : '—'}
-                </span>
+        {/* Your Rank */}
+        {isLoggedIn && hasPlayers && (
+          <Card className="border-primary/15 bg-primary/[0.02]">
+            <CardContent className="flex items-center justify-between p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+                  <span className="font-heading font-bold text-sm text-primary">#{playerRank}</span>
+                </div>
                 <div>
-                  <div className="font-bold text-white text-sm sm:text-base">{username} <span className="text-gold-light text-xs">(You)</span></div>
-                  <div className="text-xs sm:text-sm text-gray-500">{wins}W / {losses}L</div>
+                  <p className="font-medium text-sm">{username} <span className="text-primary text-xs">(You)</span></p>
+                  <p className="text-xs text-muted-foreground">{wins}W / {losses}L</p>
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-gold font-bold text-sm sm:text-base">{totalEarnings.toFixed(3)} <span className="text-xs opacity-60">{TOKEN_SYMBOL}</span></div>
-                <div className="text-[10px] sm:text-xs text-gray-600">Total earned</div>
+                <p className="text-primary font-semibold text-sm">{totalEarnings.toFixed(3)}</p>
+                <p className="text-[10px] text-muted-foreground">{TOKEN_SYMBOL} earned</p>
               </div>
-            </div>
-            {/* Progress bar to next tier */}
-            {hasPlayers && playerRank > 1 && (
-              <div className="mt-3 sm:mt-4">
-                <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
-                  <span>Progress to #{playerRank - 1}</span>
-                  <span className="text-gold-light font-medium">
-                    {playerRank <= 3 ? 'Almost there!' : `${Math.min(Math.round((wins / Math.max(leaderboard[playerRank - 2]?.wins || 1, 1)) * 100), 99)}%`}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-white/5 overflow-hidden relative">
-                  <motion.div
-                    className="h-full rounded-full bg-gradient-to-r from-gold to-gold-light relative progress-shimmer"
-                    initial={{ width: '0%' }}
-                    animate={{ width: `${Math.min((wins / Math.max(leaderboard[playerRank - 2]?.wins || 1, 1)) * 100, 99)}%` }}
-                    transition={{ delay: 0.5, duration: 1, ease: 'easeOut' }}
-                  />
-                </div>
-              </div>
-            )}
-          </motion.div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Full List */}
         {hasPlayers && (
-          <motion.div
-            className="glass-elevated rounded-xl sm:rounded-2xl overflow-hidden"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-          >
-            {/* Desktop Table Header */}
-            <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-3 text-[10px] text-gray-600 uppercase tracking-widest font-semibold border-b border-white/5">
+          <Card className="overflow-hidden">
+            {/* Table Header */}
+            <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-2.5 text-[10px] text-muted-foreground uppercase tracking-widest font-medium border-b border-border">
               <div className="col-span-1">Rank</div>
-              <div className="col-span-4">Player</div>
+              <div className="col-span-5">Player</div>
               <div className="col-span-2 text-center">Wins</div>
-              <div className="col-span-2 text-center">Losses</div>
-              <div className="col-span-3 text-right">{TOKEN_SYMBOL} Won</div>
+              <div className="col-span-1 text-center">Losses</div>
+              <div className="col-span-3 text-right">Earnings</div>
             </div>
 
-            {leaderboard.map((entry, i) => {
+            {leaderboard.map((entry) => {
               const isYou = entry.isPlayer;
               return (
-                <motion.div
+                <div
                   key={`${entry.username}-${entry.rank}`}
-                  className={`border-b border-white/[0.03] last:border-0 transition-colors ${isYou ? 'bg-gold/[0.04] hover:bg-gold/[0.07]' : 'hover:bg-white/[0.03]'}`}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.3 + i * 0.03 }}
+                  className={`border-b border-border/50 last:border-0 transition-colors ${
+                    isYou ? 'bg-primary/[0.03]' : 'hover:bg-muted/30'
+                  }`}
                 >
-                  {/* Desktop row */}
-                  <div className="hidden sm:grid grid-cols-12 gap-2 px-5 py-4 items-center">
+                  {/* Desktop */}
+                  <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-3 items-center">
                     <div className="col-span-1">
                       <span className={`text-sm font-bold ${
-                        entry.rank === 1 ? 'holo-gold' :
-                        entry.rank === 2 ? 'holo-silver' :
-                        entry.rank === 3 ? 'holo-bronze' :
-                        isYou ? 'text-gold-light' :
-                        'text-gray-600'
+                        entry.rank === 1 ? 'text-amber-400' :
+                        entry.rank === 2 ? 'text-zinc-300' :
+                        entry.rank === 3 ? 'text-orange-400' :
+                        isYou ? 'text-primary' : 'text-muted-foreground'
                       }`}>
                         {entry.rank}
                       </span>
                     </div>
-                    <div className="col-span-4 flex items-center gap-2">
-                      <span className="text-lg">{entry.avatar}</span>
-                      <div>
-                        <div className={`font-medium text-sm ${isYou ? 'text-gold-light' : 'text-white'}`}>
+                    <div className="col-span-5 flex items-center gap-2 min-w-0">
+                      <span className="text-base">{entry.avatar}</span>
+                      <div className="min-w-0">
+                        <span className={`text-sm font-medium truncate block ${isYou ? 'text-primary' : ''}`}>
                           {entry.username}{isYou ? ' (You)' : ''}
-                        </div>
-                        <div className="text-[10px] text-gray-700 font-mono">{entry.address}</div>
+                        </span>
+                        {entry.address && (
+                          <span className="text-[10px] text-muted-foreground/50 font-mono block truncate">{entry.address}</span>
+                        )}
                       </div>
                     </div>
-                    <div className="col-span-2 text-center text-mint font-semibold text-sm">{entry.wins}</div>
-                    <div className="col-span-2 text-center text-gray-500 font-medium text-sm">{entry.losses}</div>
-                    <div className="col-span-3 text-right text-gold font-semibold text-sm">{entry.earnings.toFixed(3)} {TOKEN_SYMBOL}</div>
+                    <div className="col-span-2 text-center text-emerald-400 font-medium text-sm">{entry.wins}</div>
+                    <div className="col-span-1 text-center text-muted-foreground text-sm">{entry.losses}</div>
+                    <div className="col-span-3 text-right text-primary font-medium text-sm">{entry.earnings.toFixed(3)} {TOKEN_SYMBOL}</div>
                   </div>
 
-                  {/* Mobile row */}
-                  <div className="sm:hidden flex items-center gap-3 px-3 py-3">
-                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${
-                      entry.rank === 1 ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' :
-                      entry.rank === 2 ? 'bg-gray-400/8 text-gray-300 border border-gray-400/15' :
-                      entry.rank === 3 ? 'bg-amber-600/8 text-amber-500 border border-amber-600/15' :
-                      isYou ? 'bg-gold/10 text-gold-light border border-gold/20' :
-                      'bg-white/[0.03] text-gray-600 border border-white/5'
+                  {/* Mobile */}
+                  <div className="sm:hidden flex items-center gap-2.5 px-3 py-2.5">
+                    <span className={`w-7 h-7 rounded-md flex items-center justify-center text-[11px] font-bold shrink-0 ${
+                      entry.rank === 1 ? 'bg-amber-400/10 text-amber-400' :
+                      entry.rank === 2 ? 'bg-zinc-400/10 text-zinc-300' :
+                      entry.rank === 3 ? 'bg-orange-400/10 text-orange-400' :
+                      isYou ? 'bg-primary/10 text-primary' :
+                      'bg-muted text-muted-foreground'
                     }`}>
                       {entry.rank}
                     </span>
-                    <span className="text-lg shrink-0">{entry.avatar}</span>
+                    <span className="text-base shrink-0">{entry.avatar}</span>
                     <div className="min-w-0 flex-1">
-                      <div className={`font-medium text-sm truncate ${isYou ? 'text-gold-light' : 'text-white'}`}>
+                      <span className={`text-sm font-medium truncate block ${isYou ? 'text-primary' : ''}`}>
                         {entry.username}{isYou ? ' (You)' : ''}
-                      </div>
-                      <div className="text-[10px] text-gray-600">{entry.wins}W / {entry.losses}L</div>
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">{entry.wins}W / {entry.losses}L</span>
                     </div>
-                    <span className="text-gold font-semibold text-xs shrink-0">{entry.earnings.toFixed(3)} {TOKEN_SYMBOL}</span>
+                    <span className="text-primary font-medium text-xs shrink-0">{entry.earnings.toFixed(3)}</span>
                   </div>
-                </motion.div>
+                </div>
               );
             })}
-          </motion.div>
+          </Card>
         )}
-
-        <motion.button
-          onClick={() => setScreen('lobby')}
-          className="mt-6 sm:mt-8 text-gray-600 hover:text-white transition-colors mx-auto block text-sm"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-        >
-          ← Back to Lobby
-        </motion.button>
       </div>
     </div>
   );

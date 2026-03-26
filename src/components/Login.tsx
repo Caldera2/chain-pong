@@ -5,6 +5,9 @@ import { useGameStore } from '@/lib/store';
 import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { apiLogin } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Wallet, Loader2, KeyRound, Copy, Check, ShieldAlert } from 'lucide-react';
 
 export default function Login() {
   const { login, setScreen } = useGameStore();
@@ -13,7 +16,6 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Wallet migration state (for old users getting a new real wallet)
   const [seedPhrase, setSeedPhrase] = useState('');
   const [seedCopied, setSeedCopied] = useState(false);
   const [seedConfirmed, setSeedConfirmed] = useState(false);
@@ -22,7 +24,6 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!email.trim()) return setError('Email is required');
     if (!password.trim()) return setError('Password is required');
     if (password.length < 6) return setError('Password must be at least 6 characters');
@@ -33,8 +34,6 @@ export default function Login() {
       if (res.success && res.data) {
         const data = res.data as any;
         const user = data.user;
-
-        // If wallet was migrated, show seed phrase first
         if (data.seedPhrase && data.walletMigrated) {
           setSeedPhrase(data.seedPhrase);
           setPendingUser({ email: user.email || email, username: user.username });
@@ -44,8 +43,8 @@ export default function Login() {
       } else {
         setError(res.error || 'Invalid email or password');
       }
-    } catch (err: any) {
-      setError('Could not connect to server. Please check your connection and try again.');
+    } catch {
+      setError('Could not connect to server. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -54,79 +53,75 @@ export default function Login() {
   // Seed phrase migration screen
   if (seedPhrase && pendingUser) {
     return (
-      <div className="min-h-screen gradient-bg flex items-center justify-center px-4 py-8">
+      <div className="min-h-screen bg-background flex items-center justify-center px-4 py-8">
         <motion.div
-          className="w-full max-w-md"
-          initial={{ opacity: 0, y: 30 }}
+          className="w-full max-w-sm"
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
+          transition={{ duration: 0.4 }}
         >
-          <div className="glass rounded-2xl sm:rounded-3xl p-6 sm:p-8 space-y-5">
-            {/* Header */}
+          <div className="rounded-xl border border-border bg-card p-6 space-y-5">
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full mx-auto mb-3 flex items-center justify-center bg-gradient-to-br from-gold/20 to-lavender/20 border border-gold/30">
-                <span className="text-2xl">🔑</span>
+              <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 mx-auto mb-3 flex items-center justify-center">
+                <KeyRound className="w-5 h-5 text-primary" />
               </div>
-              <h2 className="text-xl font-bold text-white mb-1">Wallet Upgraded</h2>
-              <p className="text-gray-400 text-sm">
-                Your game wallet has been upgraded to a real wallet. Save your recovery phrase — it&apos;s the <span className="text-coral font-medium">only way</span> to recover your wallet.
+              <h2 className="font-heading text-lg font-semibold text-foreground mb-1">Wallet Upgraded</h2>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                Save your recovery phrase — it&apos;s the only way to recover your wallet.
               </p>
             </div>
 
-            {/* Warning banner */}
-            <div className="bg-coral/10 border border-coral/20 rounded-xl p-3">
-              <p className="text-coral text-xs font-medium text-center">
-                Write these words down and store them safely. Never share them with anyone.
-              </p>
+            <div className="bg-destructive/5 border border-destructive/10 rounded-lg p-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-destructive shrink-0" />
+                <p className="text-destructive text-xs font-medium">
+                  Write these words down. Never share them.
+                </p>
+              </div>
             </div>
 
-            {/* Seed phrase grid */}
-            <div className="bg-black/40 border border-white/10 rounded-xl p-4">
-              <div className="grid grid-cols-3 gap-2">
+            <div className="bg-secondary rounded-lg p-3">
+              <div className="grid grid-cols-3 gap-1.5">
                 {seedPhrase.split(' ').map((word, i) => (
-                  <div key={i} className="flex items-center gap-1.5 bg-white/[0.03] rounded-lg px-2 py-1.5">
-                    <span className="text-[10px] text-gray-600 w-4 text-right">{i + 1}.</span>
-                    <span className="text-white text-xs font-mono">{word}</span>
+                  <div key={i} className="flex items-center gap-1.5 bg-background/60 rounded-md px-2 py-1.5">
+                    <span className="text-[10px] text-muted-foreground w-3 text-right">{i + 1}.</span>
+                    <span className="text-foreground text-xs font-mono">{word}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Copy button */}
-            <button
+            <Button
+              variant="outline"
+              className="w-full"
               onClick={() => {
                 navigator.clipboard.writeText(seedPhrase);
                 setSeedCopied(true);
                 setTimeout(() => setSeedCopied(false), 3000);
               }}
-              className="w-full bg-white/[0.05] border border-white/10 py-2.5 rounded-xl text-sm font-medium text-white hover:bg-white/[0.08] transition-colors"
             >
-              {seedCopied ? '✓ Copied to Clipboard' : 'Copy Recovery Phrase'}
-            </button>
+              {seedCopied ? <><Check className="w-4 h-4" /> Copied</> : <><Copy className="w-4 h-4" /> Copy Phrase</>}
+            </Button>
 
-            {/* Confirm checkbox */}
-            <label className="flex items-start gap-3 cursor-pointer">
+            <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={seedConfirmed}
                 onChange={(e) => setSeedConfirmed(e.target.checked)}
-                className="mt-0.5 rounded border-white/20 bg-white/5 accent-gold"
+                className="mt-0.5 rounded border-border bg-secondary accent-primary"
               />
-              <span className="text-gray-400 text-xs leading-relaxed">
-                I have saved my recovery phrase and understand that if I lose it, I cannot recover my wallet.
+              <span className="text-muted-foreground text-xs leading-relaxed">
+                I have saved my recovery phrase and understand it cannot be recovered if lost.
               </span>
             </label>
 
-            {/* Continue button */}
-            <button
-              onClick={() => {
-                login(pendingUser.email, pendingUser.username, 'email');
-              }}
+            <Button
+              className="w-full"
               disabled={!seedConfirmed}
-              className="w-full bg-gradient-to-r from-gold to-lavender py-3 sm:py-3.5 rounded-xl font-semibold text-white text-sm sm:text-base hover:shadow-[0_0_20px_rgba(212,160,23,0.4)] transition-shadow disabled:opacity-30 disabled:cursor-not-allowed"
+              onClick={() => login(pendingUser.email, pendingUser.username, 'email')}
             >
               Continue to Game
-            </button>
+            </Button>
           </div>
         </motion.div>
       </div>
@@ -134,143 +129,124 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen gradient-bg flex items-center justify-center px-4 py-8">
+    <div className="min-h-screen bg-background flex items-center justify-center px-4 py-8">
+      {/* Ambient glow */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-primary/[0.03] blur-[120px] rounded-full" />
+      </div>
+
       <motion.div
-        className="w-full max-w-md"
-        initial={{ opacity: 0, y: 30 }}
+        className="w-full max-w-sm relative z-10"
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
+        transition={{ duration: 0.4 }}
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <motion.div
-            className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center"
-            style={{
-              background: 'radial-gradient(circle at 35% 35%, #fff8e7, #f5d060 40%, #d4a017 70%, #a67c00 100%)',
-              boxShadow: '0 0 30px rgba(245,208,96,0.4)',
-            }}
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring', delay: 0.2 }}
-          >
-            <span className="text-2xl">🏓</span>
-          </motion.div>
-          <h1 className="text-3xl sm:text-4xl font-bold">
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-gold-light to-gold">CHAIN</span>
-            <span className="text-white/90"> PONG</span>
+          <div className="w-12 h-12 rounded-xl bg-primary mx-auto mb-4 flex items-center justify-center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="text-primary-foreground">
+              <circle cx="12" cy="12" r="4" fill="currentColor" />
+              <rect x="1" y="6" width="3" height="12" rx="1.5" fill="currentColor" />
+              <rect x="20" y="6" width="3" height="12" rx="1.5" fill="currentColor" />
+            </svg>
+          </div>
+          <h1 className="font-heading text-2xl font-bold tracking-tight">
+            <span className="text-primary">Chain</span>
+            <span className="text-foreground">Pong</span>
           </h1>
-
         </div>
 
-        {/* Login Form */}
+        {/* Form */}
         <motion.form
           onSubmit={handleLogin}
-          className="glass rounded-2xl sm:rounded-3xl p-6 sm:p-8 space-y-5"
-          initial={{ opacity: 0, y: 20 }}
+          className="rounded-xl border border-border bg-card p-6 space-y-4"
+          initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
+          transition={{ delay: 0.15 }}
         >
-          <div>
-            <label className="text-sm text-gray-400 mb-1.5 block">Email</label>
-            <input
+          <div className="space-y-1.5">
+            <label className="text-sm text-muted-foreground">Email</label>
+            <Input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="player@example.com"
-              className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 sm:py-3.5 text-white placeholder-gray-600 focus:outline-none focus:border-gold/40 focus:bg-white/[0.05] transition-all text-sm sm:text-base"
+              placeholder="you@example.com"
               autoComplete="email"
             />
           </div>
 
-          <div>
-            <label className="text-sm text-gray-400 mb-1.5 block">Password</label>
-            <input
+          <div className="space-y-1.5">
+            <label className="text-sm text-muted-foreground">Password</label>
+            <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
-              className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 sm:py-3.5 text-white placeholder-gray-600 focus:outline-none focus:border-gold/40 focus:bg-white/[0.05] transition-all text-sm sm:text-base"
               autoComplete="current-password"
             />
           </div>
 
           {error && (
-            <motion.p
-              className="text-coral text-sm bg-coral/10 rounded-lg px-3 py-2"
-              initial={{ opacity: 0, y: -5 }}
+            <motion.div
+              className="text-destructive text-sm bg-destructive/5 border border-destructive/10 rounded-lg px-3 py-2"
+              initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
             >
               {error}
-            </motion.p>
+            </motion.div>
           )}
 
           <div className="flex items-center justify-between text-sm">
-            <label className="flex items-center gap-2 text-gray-400 cursor-pointer">
-              <input type="checkbox" className="rounded border-white/20 bg-white/5 accent-gold" />
+            <label className="flex items-center gap-2 text-muted-foreground cursor-pointer">
+              <input type="checkbox" className="rounded border-border bg-secondary accent-primary" />
               Remember me
             </label>
-            <button type="button" onClick={() => setScreen('forgot-password')} className="text-gold hover:underline">
+            <button type="button" onClick={() => setScreen('forgot-password')} className="text-primary text-sm hover:underline">
               Forgot password?
             </button>
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full btn-primary py-3 sm:py-3.5 rounded-xl font-semibold text-sm sm:text-base disabled:opacity-50"
-          >
+          <Button type="submit" disabled={loading} className="w-full" size="lg">
             {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
                 Logging in...
               </span>
             ) : (
               'Log In'
             )}
-          </button>
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-white/8" />
-            <span className="text-xs text-gray-600 uppercase tracking-wider">or</span>
-            <div className="flex-1 h-px bg-white/8" />
+          </Button>
+
+          <div className="flex items-center gap-3 py-1">
+            <div className="flex-1 h-px bg-border" />
+            <span className="text-xs text-muted-foreground uppercase tracking-wider">or</span>
+            <div className="flex-1 h-px bg-border" />
           </div>
 
-          {/* Continue with Wallet */}
           <ConnectButton.Custom>
             {({ openConnectModal, mounted }) => (
               mounted && (
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="lg"
+                  className="w-full"
                   onClick={openConnectModal}
-                  className="w-full btn-secondary py-3 sm:py-3.5 rounded-xl font-semibold text-white text-sm sm:text-base flex items-center justify-center gap-2.5"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="shrink-0">
-                    <rect x="2" y="6" width="20" height="14" rx="3" stroke="currentColor" strokeWidth="2"/>
-                    <path d="M16 13.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" fill="currentColor"/>
-                    <path d="M6 6V5a3 3 0 013-3h6a3 3 0 013 3v1" stroke="currentColor" strokeWidth="2"/>
-                  </svg>
+                  <Wallet className="w-4 h-4" />
                   Continue with Wallet
-                </button>
+                </Button>
               )
             )}
           </ConnectButton.Custom>
         </motion.form>
 
-        {/* Sign up link */}
-        <motion.p
-          className="text-center mt-6 text-gray-500 text-sm"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-        >
+        <p className="text-center mt-5 text-muted-foreground text-sm">
           Don&apos;t have an account?{' '}
-          <button
-            onClick={() => setScreen('signup')}
-            className="text-gold font-semibold hover:underline"
-          >
+          <button onClick={() => setScreen('signup')} className="text-primary font-medium hover:underline">
             Sign Up
           </button>
-        </motion.p>
+        </p>
       </motion.div>
     </div>
   );
