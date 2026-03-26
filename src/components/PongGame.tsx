@@ -489,7 +489,7 @@ export default function PongGame() {
         const [r, g, b] = COLORS.trailColor;
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha * 0.25})`;
         ctx.beginPath();
-        ctx.arc(t.x, t.y, BALL_R * (1 - t.age / 12) * 0.8, 0, Math.PI * 2);
+        ctx.arc(t.x, t.y, Math.max(0, BALL_R * (1 - t.age / 12) * 0.8), 0, Math.PI * 2);
         ctx.fill();
       });
 
@@ -509,10 +509,11 @@ export default function PongGame() {
         p.life -= 0.025;
         p.vx *= 0.97;
         p.vy *= 0.97;
+        if (p.life <= 0) return;
         ctx.fillStyle = p.color;
         ctx.globalAlpha = p.life * 0.8;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, Math.max(0, p.size * p.life), 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.globalAlpha = 1;
