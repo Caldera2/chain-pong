@@ -253,10 +253,6 @@ export default function PongGame() {
     let animId: number;
     const loop = () => {
       if (!running) return;
-      // Always schedule next frame first so errors can't kill the loop
-      animId = requestAnimationFrame(loop);
-
-      try {
       frameCount++;
 
       // ─── AI Perk System (infinite perks, scales with difficulty) ───
@@ -544,9 +540,7 @@ export default function PongGame() {
         ctx.fillText(`Stake: ${pvpStakeAmount} ${TOKEN_SYMBOL} each | Pot: ${(pvpStakeAmount * 2).toFixed(4)} ${TOKEN_SYMBOL}`, CANVAS_W / 2, CANVAS_H - 14);
       }
 
-      } catch (err) {
-        console.error('Game loop error:', err);
-      }
+      animId = requestAnimationFrame(loop);
     };
 
     animId = requestAnimationFrame(loop);
