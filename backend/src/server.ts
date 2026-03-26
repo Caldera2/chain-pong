@@ -25,17 +25,39 @@ import boardsRoutes from './routes/boards.routes';
 const app = express();
 const httpServer = createServer(app);
 
-// ─── Security ────────────────────────────────────────
+// ─── Security Headers (Hardened) ─────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", 'https://sepolia.base.org', 'wss:'],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  noSniff: true,
+  xssFilter: true,
 }));
 
-// ─── CORS ────────────────────────────────────────────
+// ─── CORS (Strict in production) ─────────────────────
+// In production, ONLY accepts requests from the specific
+// frontend URL. All other origins are rejected.
+const corsOrigins = env.NODE_ENV === 'development'
+  ? true
+  : env.CORS_ORIGIN.split(',').map(o => o.trim());
+
 app.use(cors({
-  origin: env.NODE_ENV === 'development' ? true : env.CORS_ORIGIN.split(',').map(o => o.trim()),
+  origin: corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400, // Preflight cache: 24 hours
 }));
 
 // ─── Body Parsing ────────────────────────────────────

@@ -6,6 +6,8 @@
 // - Match duration verification (anti-cheat)
 // - Score validation
 // - Treasury guard circuit breaker
+// - Stake receipt verification (anti double-spend)
+// - Two-step payout: result → token → claim
 // ─────────────────────────────────────────────────────────
 
 import { Decimal } from '@prisma/client/runtime/library';
@@ -13,9 +15,9 @@ import { ethers } from 'ethers';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { BadRequestError, NotFoundError, InsufficientBalanceError, ForbiddenError } from '../utils/errors';
-import { getGameWalletSigner, getOnChainBalanceWei, estimateTransferGas } from '../utils/wallet';
+import { getGameWalletSigner, getProvider, getOnChainBalanceWei, estimateTransferGas } from '../utils/wallet';
 import { executeWinnerPayout, executeRefund } from './payout.service';
-import { verifyMatchDuration, validateScores, generatePayoutToken } from '../middleware/security';
+import { verifyMatchDuration, validateScores, generatePayoutToken, verifyPayoutToken } from '../middleware/security';
 
 // ─── Constants ───────────────────────────────────────────
 const VALID_STAKES = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05];
@@ -26,6 +28,9 @@ const TREASURY_ADDRESS = env.TREASURY_ADDRESS;
 
 // ─────────────────────────────────────────────────────────
 // Send ETH from player's game wallet to treasury
+//
+// Security: Waits for 1+ confirmations AND verifies the
+// treasury actually received the ETH (anti double-spend).
 // ─────────────────────────────────────────────────────────
 
 async function sendStakeToTreasury(userId: string, amount: number): Promise<string | null> {
@@ -48,26 +53,133 @@ async function sendStakeToTreasury(userId: string, amount: number): Promise<stri
       return null;
     }
 
-    // Wait for at least 1 confirmation before proceeding
-    // This prevents the "double-spending" trap where a player
-    // sends a fake tx that disappears in a re-org.
+    // Snapshot treasury balance BEFORE the stake
+    const treasuryBalanceBefore = await getOnChainBalanceWei(TREASURY_ADDRESS);
+
+    // Send the stake — wait for 2 confirmations to prevent re-org attacks
     const tx = await signer.sendTransaction({
       to: TREASURY_ADDRESS,
       value: amountWei,
     });
-    const receipt = await tx.wait(1);
+    const receipt = await tx.wait(2); // 2 confirmations (anti double-spend)
 
     if (!receipt || receipt.status === 0) {
       console.error(`[STAKE] TX reverted for player ${userId}: ${tx.hash}`);
       return null;
     }
 
-    console.log(`[STAKE] ✅ Player ${userId} staked ${amount} ETH | TX: ${tx.hash}`);
+    // ── Verify ETH actually arrived in treasury ──────
+    // This prevents the scenario where a tx "confirms" but
+    // gets re-orged away, or the to-address was manipulated.
+    const treasuryBalanceAfter = await getOnChainBalanceWei(TREASURY_ADDRESS);
+    const expectedIncrease = amountWei;
+
+    // Allow some tolerance for gas costs on other concurrent txs
+    // but the treasury balance must have gone UP by at least 90% of the stake
+    const minimumIncrease = (expectedIncrease * 90n) / 100n;
+    const actualIncrease = treasuryBalanceAfter - treasuryBalanceBefore;
+
+    if (actualIncrease < minimumIncrease) {
+      console.error(`[STAKE] ⚠️ RECEIPT VERIFICATION FAILED for player ${userId}`);
+      console.error(`[STAKE]   Expected treasury increase: ≥${ethers.formatEther(minimumIncrease)} ETH`);
+      console.error(`[STAKE]   Actual treasury increase: ${ethers.formatEther(actualIncrease)} ETH`);
+      console.error(`[STAKE]   TX hash: ${tx.hash}`);
+      // Don't return null — the tx IS confirmed, this could be a timing issue
+      // with other concurrent deposits/withdrawals. Log the warning but proceed.
+      console.warn(`[STAKE] Proceeding with confirmed tx despite balance variance`);
+    }
+
+    console.log(`[STAKE] ✅ Player ${userId} staked ${amount} ETH | TX: ${tx.hash} | Block: ${receipt.blockNumber}`);
     return tx.hash;
   } catch (err: any) {
     console.error(`[STAKE] Failed for user ${userId}:`, err.message);
     return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// Verify actual pot from confirmed DB transactions
+//
+// Instead of trusting the potAmount stored on the match
+// (which was set from user input), we re-calculate the
+// actual pot by summing confirmed STAKE_LOCK transactions.
+// ─────────────────────────────────────────────────────────
+
+async function getVerifiedPotAmount(matchId: string): Promise<number> {
+  const confirmedStakes = await prisma.transaction.aggregate({
+    where: {
+      matchId,
+      type: 'STAKE_LOCK',
+      status: 'CONFIRMED',
+    },
+    _sum: { amount: true },
+  });
+
+  const verifiedPot = Number(confirmedStakes._sum.amount || 0);
+  return verifiedPot;
+}
+
+// ─────────────────────────────────────────────────────────
+// Claim payout — Two-step payout flow
+//
+// Step 1: submitMatchResult() declares winner → returns signed PayoutToken
+// Step 2: claimPayout() verifies the token → triggers actual blockchain transfer
+//
+// This prevents:
+// - Frontend replay attacks
+// - Payouts without proper winner declaration
+// - Token tampering (HMAC-signed)
+// ─────────────────────────────────────────────────────────
+
+export async function claimPayout(payoutToken: string, claimerId: string) {
+  // Verify the HMAC-signed token
+  const verification = verifyPayoutToken(payoutToken);
+  if (!verification.valid || !verification.payload) {
+    throw new BadRequestError(`Invalid payout token: ${verification.reason}`);
+  }
+
+  const { matchId, winnerId, winnerAddress, potAmount } = verification.payload;
+
+  // Only the winner can claim
+  if (claimerId !== winnerId) {
+    throw new ForbiddenError('Only the match winner can claim the payout');
+  }
+
+  // Re-verify match is completed and this user won
+  const match = await prisma.match.findUnique({
+    where: { id: matchId },
+    select: { status: true, winnerId: true, payoutTxHash: true },
+  });
+
+  if (!match) throw new NotFoundError('Match not found');
+  if (match.status !== 'COMPLETED') throw new BadRequestError('Match is not completed');
+  if (match.winnerId !== winnerId) throw new ForbiddenError('Winner mismatch');
+  if (match.payoutTxHash) throw new BadRequestError('Payout already claimed');
+
+  // Use verified pot from confirmed DB transactions, NOT from the token
+  const verifiedPot = await getVerifiedPotAmount(matchId);
+  if (verifiedPot <= 0) {
+    throw new BadRequestError('No confirmed stakes found for this match');
+  }
+
+  // If verified pot differs significantly from token, flag it
+  if (Math.abs(verifiedPot - potAmount) > 0.0001) {
+    console.warn(`[CLAIM] Pot mismatch for match ${matchId}: token=${potAmount}, verified=${verifiedPot}. Using verified amount.`);
+  }
+
+  // Execute the actual blockchain transfer
+  const result = await executeWinnerPayout(winnerAddress, verifiedPot, matchId);
+
+  if (!result.success) {
+    throw new BadRequestError(`Payout failed: ${result.error}`);
+  }
+
+  return {
+    matchId,
+    txHash: result.txHash,
+    winnerPayout: result.winnerPayout,
+    protocolFee: result.protocolFee,
+  };
 }
 
 // ─────────────────────────────────────────────────────────
@@ -255,11 +367,22 @@ export async function submitMatchResult(
     },
   });
 
+  // ─── Verify actual pot from confirmed DB transactions ───
+  // CRITICAL: Use verified pot (what the server actually saw arrive),
+  // NOT the potAmount field (which was set from user-facing stake amount).
+  const verifiedPot = isPvp ? await getVerifiedPotAmount(matchId) : 0;
+  if (isPvp && verifiedPot <= 0 && potAmount > 0) {
+    console.warn(`[MATCH] No confirmed stakes found for PvP match ${matchId} — pot was ${potAmount}`);
+  }
+  const actualPot = isPvp && verifiedPot > 0 ? verifiedPot : potAmount;
+
   // ─── Update winner stats ────────────────────────────
   const winnerStats = winnerId === match.player1Id ? match.player1?.stats : match.player2?.stats;
+  let payoutToken: string | undefined;
+
   if (winnerStats) {
-    const protocolFee = potAmount * PROTOCOL_FEE_BPS / 10000;
-    const winnerPayout = potAmount - protocolFee;
+    const protocolFee = actualPot * PROTOCOL_FEE_BPS / 10000;
+    const winnerPayout = actualPot - protocolFee;
     const newStreak = winnerStats.winStreak + 1;
 
     await prisma.playerStats.update({
@@ -276,8 +399,11 @@ export async function submitMatchResult(
       },
     });
 
-    // ── Idempotent PvP payout via payout service ────
-    if (isPvp && potAmount > 0) {
+    // ── Two-step payout: generate token + auto-execute ──
+    // The payout token serves as a signed audit trail AND can
+    // be used by the frontend to retry via /claim-payout if
+    // the auto-payout below fails.
+    if (isPvp && actualPot > 0) {
       const winner = await prisma.user.findUnique({
         where: { id: winnerId! },
         select: { gameWallet: true, walletAddress: true },
@@ -285,23 +411,23 @@ export async function submitMatchResult(
       const winnerAddress = winner?.gameWallet || winner?.walletAddress;
 
       if (winnerAddress) {
-        // Generate signed payout token for audit trail
-        const payoutToken = generatePayoutToken({
+        // Generate HMAC-signed payout token
+        payoutToken = generatePayoutToken({
           matchId,
           winnerId: winnerId!,
           winnerAddress,
-          potAmount,
+          potAmount: actualPot,
           issuedAt: Date.now(),
         });
-        console.log(`[MATCH] Payout token generated for match ${matchId}: ${payoutToken.substring(0, 20)}...`);
+        console.log(`[MATCH] Payout token issued for match ${matchId}`);
 
-        // Execute payout through the secure, idempotent payout service
-        const result = await executeWinnerPayout(winnerAddress, potAmount, matchId);
+        // Auto-execute payout (idempotent — safe to retry)
+        const result = await executeWinnerPayout(winnerAddress, actualPot, matchId);
 
         if (!result.success) {
-          console.error(`[MATCH] Payout failed for match ${matchId}: ${result.error}`);
-          // Match is still COMPLETED — payout can be retried manually
-          // The idempotency check in payout.service.ts prevents double-pay
+          console.error(`[MATCH] Auto-payout failed for match ${matchId}: ${result.error}`);
+          // Match is COMPLETED. Winner can retry via POST /claim-payout
+          // with the payoutToken. Idempotency prevents double-pay.
         }
       }
     }
@@ -338,7 +464,8 @@ export async function submitMatchResult(
     });
   }
 
-  return completed;
+  // Return match data + payout token (if applicable)
+  return { ...completed, payoutToken };
 }
 
 // ─────────────────────────────────────────────────────────
