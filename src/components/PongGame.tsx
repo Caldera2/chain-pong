@@ -113,6 +113,23 @@ export default function PongGame() {
     const ctx = canvas.getContext('2d')!;
     let running = true; // flag to stop loop on cleanup
 
+    // Polyfill roundRect for older browsers
+    if (!ctx.roundRect) {
+      (ctx as any).roundRect = function (x: number, y: number, w: number, h: number, r: number) {
+        const radius = Math.min(r, w / 2, h / 2);
+        this.moveTo(x + radius, y);
+        this.lineTo(x + w - radius, y);
+        this.arcTo(x + w, y, x + w, y + radius, radius);
+        this.lineTo(x + w, y + h - radius);
+        this.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+        this.lineTo(x + radius, y + h);
+        this.arcTo(x, y + h, x, y + h - radius, radius);
+        this.lineTo(x, y + radius);
+        this.arcTo(x, y, x + radius, y, radius);
+        this.closePath();
+      };
+    }
+
     let playerY = CANVAS_H / 2 - PADDLE_H / 2;
     let opponentY = CANVAS_H / 2 - PADDLE_H / 2;
     let ballX = CANVAS_W / 2;
@@ -236,6 +253,10 @@ export default function PongGame() {
     let animId: number;
     const loop = () => {
       if (!running) return;
+      // Always schedule next frame first so errors can't kill the loop
+      animId = requestAnimationFrame(loop);
+
+      try {
       frameCount++;
 
       // ─── AI Perk System (infinite perks, scales with difficulty) ───
@@ -452,6 +473,8 @@ export default function PongGame() {
         }
         // Clear active match on completion
         try { localStorage.removeItem('chainpong-active-match'); } catch {}
+        running = false;
+        cancelAnimationFrame(animId);
         gameStateRef.current.gameOver = true;
         gameStateRef.current.maxRally = maxRally;
         gameStateRef.current.totalRallies = totalRallies;
@@ -521,7 +544,9 @@ export default function PongGame() {
         ctx.fillText(`Stake: ${pvpStakeAmount} ${TOKEN_SYMBOL} each | Pot: ${(pvpStakeAmount * 2).toFixed(4)} ${TOKEN_SYMBOL}`, CANVAS_W / 2, CANVAS_H - 14);
       }
 
-      if (running) animId = requestAnimationFrame(loop);
+      } catch (err) {
+        console.error('Game loop error:', err);
+      }
     };
 
     animId = requestAnimationFrame(loop);
