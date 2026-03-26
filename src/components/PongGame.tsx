@@ -51,7 +51,20 @@ export default function PongGame() {
     lastScoreUpdate: 0, // throttle score UI updates
   });
 
-  const { difficulty, setScreen, addWin, addLoss, boards, selectedBoard, pvpStakeAmount } = useGameStore();
+  // Use individual selectors to avoid re-renders from unrelated store changes (e.g. balance polling)
+  const difficulty = useGameStore((s) => s.difficulty);
+  const setScreen = useGameStore((s) => s.setScreen);
+  const addWin = useGameStore((s) => s.addWin);
+  const addLoss = useGameStore((s) => s.addLoss);
+  const boards = useGameStore((s) => s.boards);
+  const selectedBoard = useGameStore((s) => s.selectedBoard);
+  const pvpStakeAmount = useGameStore((s) => s.pvpStakeAmount);
+  // Stable refs for store functions to avoid effect re-runs
+  const addWinRef = useRef(addWin);
+  addWinRef.current = addWin;
+  const addLossRef = useRef(addLoss);
+  addLossRef.current = addLoss;
+
   const [playerScore, setPlayerScore] = useState(0);
   const [opponentScore, setOpponentScore] = useState(0);
   const [gameOver, setGameOver] = useState(false);
@@ -98,6 +111,7 @@ export default function PongGame() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
+    let running = true; // flag to stop loop on cleanup
 
     let playerY = CANVAS_H / 2 - PADDLE_H / 2;
     let opponentY = CANVAS_H / 2 - PADDLE_H / 2;
@@ -221,6 +235,7 @@ export default function PongGame() {
 
     let animId: number;
     const loop = () => {
+      if (!running) return;
       frameCount++;
 
       // ─── AI Perk System (infinite perks, scales with difficulty) ───
@@ -431,9 +446,9 @@ export default function PongGame() {
       // Check win
       if (pScore >= WIN_SCORE || oScore >= WIN_SCORE) {
         if (pScore >= WIN_SCORE) {
-          addWin(winPrize);
+          addWinRef.current(winPrize);
         } else {
-          addLoss(losePenalty);
+          addLossRef.current(losePenalty);
         }
         // Clear active match on completion
         try { localStorage.removeItem('chainpong-active-match'); } catch {}
@@ -506,11 +521,12 @@ export default function PongGame() {
         ctx.fillText(`Stake: ${pvpStakeAmount} ${TOKEN_SYMBOL} each | Pot: ${(pvpStakeAmount * 2).toFixed(4)} ${TOKEN_SYMBOL}`, CANVAS_W / 2, CANVAS_H - 14);
       }
 
-      animId = requestAnimationFrame(loop);
+      if (running) animId = requestAnimationFrame(loop);
     };
 
     animId = requestAnimationFrame(loop);
     return () => {
+      running = false;
       cancelAnimationFrame(animId);
       canvas.removeEventListener('mousemove', handleMouse);
       canvas.removeEventListener('touchmove', handleTouch);
