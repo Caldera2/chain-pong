@@ -32,6 +32,12 @@ export const env = {
   RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
   RATE_LIMIT_MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
 
+  // Treasury Security
+  CIRCUIT_BREAKER_LIMIT: process.env.CIRCUIT_BREAKER_LIMIT || '0.5',
+  HOT_WALLET_MIN: process.env.HOT_WALLET_MIN || '0.05',
+  MAX_SINGLE_PAYOUT: process.env.MAX_SINGLE_PAYOUT || '0.2',
+  ALERT_WEBHOOK_URL: process.env.ALERT_WEBHOOK_URL || '',
+
   // Derived
   isDev: process.env.NODE_ENV !== 'production',
   isProd: process.env.NODE_ENV === 'production',

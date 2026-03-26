@@ -1,5 +1,6 @@
 import { Router, Response, NextFunction } from 'express';
 import { requireAuth } from '../middleware/auth';
+import { validateMatchResultRequest } from '../middleware/security';
 import * as matchService from '../services/match.service';
 import { createMatchSchema, submitResultSchema } from '../utils/validators';
 import { AuthRequest } from '../types';
@@ -48,7 +49,7 @@ router.post('/:id/join', requireAuth, async (req: AuthRequest, res: Response, ne
 // ─────────────────────────────────────────────────────────
 // POST /api/matches/:id/result — Submit match result
 // ─────────────────────────────────────────────────────────
-router.post('/:id/result', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.post('/:id/result', requireAuth, validateMatchResultRequest, async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const body = submitResultSchema.parse({ ...req.body, matchId: String(req.params.id) });
     const match = await matchService.submitMatchResult(

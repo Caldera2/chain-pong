@@ -8,6 +8,8 @@ import { env } from './config/env';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import { initializeSocket, getOnlineCount } from './services/socket.service';
+import { auditSecretSafety } from './middleware/security';
+import { treasuryGuard } from './services/treasury.guard';
 
 // Routes
 import authRoutes from './routes/auth.routes';
@@ -68,6 +70,7 @@ app.get('/api/health', (_req, res) => {
       environment: env.NODE_ENV,
       uptime: Math.floor(process.uptime()),
       onlinePlayers: getOnlineCount(),
+      treasury: treasuryGuard.getStatus(),
       timestamp: new Date().toISOString(),
     },
   });
@@ -100,6 +103,12 @@ if (!process.env.VERCEL) {
 if (!process.env.VERCEL) {
   async function start() {
     await connectDatabase();
+
+    // Run security audit on startup
+    auditSecretSafety();
+
+    // Check treasury balance on boot
+    treasuryGuard.checkBalance().catch(() => {});
 
     httpServer.listen(env.PORT, () => {
       console.log(`
