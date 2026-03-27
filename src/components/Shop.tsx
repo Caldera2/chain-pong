@@ -10,7 +10,7 @@ import {
   ArrowLeft, Check, Wallet, Lock, Loader2,
   ShieldCheck, AlertTriangle, X,
 } from 'lucide-react';
-import { useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
+import { useSendTransaction, useWaitForTransactionReceipt, useAccount, useSwitchChain } from 'wagmi';
 import { parseEther } from 'viem';
 
 // Treasury address for wallet-user on-chain purchases
@@ -225,8 +225,10 @@ export default function Shop() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [buyingBoardId, setBuyingBoardId] = useState<string | null>(null);
 
-  // Wagmi: send transaction (for wallet users only)
+  // Wagmi: send transaction + chain switching (for wallet users only)
   const { sendTransactionAsync } = useSendTransaction();
+  const { chainId: walletChainId } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
 
   const effectiveBalance = authMethod === 'wallet' ? walletBalance : balance;
 
@@ -247,6 +249,18 @@ export default function Shop() {
       if (authMethod === 'wallet' && selectedBoard.price > 0) {
         setModalStatus('signing');
         try {
+          // Auto-switch to Base Sepolia if wallet is on wrong chain
+          if (walletChainId !== ACTIVE_CHAIN.id) {
+            try {
+              await switchChainAsync({ chainId: ACTIVE_CHAIN.id });
+            } catch {
+              setModalStatus('error');
+              setModalError(`Please switch your wallet to ${CHAIN_NAME}`);
+              setBuyingBoardId(null);
+              return;
+            }
+          }
+
           const hash = await sendTransactionAsync({
             to: TREASURY_ADDRESS as `0x${string}`,
             value: parseEther(selectedBoard.price.toString()),
@@ -284,7 +298,7 @@ export default function Shop() {
     } finally {
       setBuyingBoardId(null);
     }
-  }, [selectedBoard, authMethod, sendTransactionAsync, buyBoard]);
+  }, [selectedBoard, authMethod, sendTransactionAsync, switchChainAsync, walletChainId, buyBoard]);
 
   const handleCloseModal = useCallback(() => {
     setSelectedBoard(null);

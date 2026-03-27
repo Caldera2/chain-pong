@@ -1,7 +1,7 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { WagmiProvider, useAccount, useBalance, useDisconnect, useSignMessage } from 'wagmi';
+import { WagmiProvider, useAccount, useBalance, useDisconnect, useSignMessage, useSwitchChain } from 'wagmi';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import { config, ACTIVE_CHAIN } from '@/lib/wagmi';
@@ -10,19 +10,39 @@ import { useGameStore } from '@/lib/store';
 import { apiGetNonce, apiWalletAuth } from '@/lib/api';
 
 function WalletSync() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId: walletChainId } = useAccount();
   const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id, query: { refetchInterval: 10000 } });
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
+  const { switchChainAsync } = useSwitchChain();
   const { setConnected, setWalletBalance, isLoggedIn, login, screen } = useGameStore();
   const prevLoggedIn = useRef(isLoggedIn);
   const authInProgress = useRef(false);
   const isLoggedInRef = useRef(isLoggedIn);
+  const chainSwitchAttempted = useRef(false);
   isLoggedInRef.current = isLoggedIn;
 
   useEffect(() => {
     setConnected(isConnected, address);
   }, [isConnected, address, setConnected]);
+
+  // Auto-switch wallet to Base Sepolia if on wrong chain
+  useEffect(() => {
+    if (isConnected && walletChainId && walletChainId !== ACTIVE_CHAIN.id && !chainSwitchAttempted.current) {
+      chainSwitchAttempted.current = true;
+      switchChainAsync({ chainId: ACTIVE_CHAIN.id })
+        .then(() => {
+          console.log(`[WALLET] Switched to ${ACTIVE_CHAIN.name}`);
+        })
+        .catch((err) => {
+          console.warn('[WALLET] Chain switch failed:', err?.message);
+        })
+        .finally(() => {
+          // Reset after a delay so it can retry if user switches back
+          setTimeout(() => { chainSwitchAttempted.current = false; }, 10000);
+        });
+    }
+  }, [isConnected, walletChainId, switchChainAsync]);
 
   // Auto-login when wallet connects on auth screens — via backend
   const handleWalletAuth = useCallback(async (walletAddress: string) => {
