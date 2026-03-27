@@ -51,6 +51,7 @@ contract ChainPongEscrow {
 
     address public owner;
     address public resolver;            // backend address authorized to settle
+    address public revenueWallet;       // where withdrawEarnings() sends ETH (changeable)
     uint256 public protocolFeeBps;      // basis points (400 = 4%)
     uint256 public minStake;
     uint256 public maxStake;
@@ -61,6 +62,7 @@ contract ChainPongEscrow {
     uint256 public totalMatches;
     uint256 public totalVolume;
     uint256 public totalDeveloperEarnings;   // Accumulated: match fees + perk sales
+    uint256 public totalPerkRevenue;         // Subset: earnings from perk sales only
     uint256 public totalWithdrawn;           // Running total of dev withdrawals
 
     // ── Mappings ─────────────────────────────────────────
@@ -92,6 +94,7 @@ contract ChainPongEscrow {
     event PerkUpdated(uint256 indexed perkId, uint256 price, bool active);
 
     event EarningsWithdrawn(address indexed to, uint256 amount);
+    event RevenueWalletUpdated(address indexed newWallet);
     event StakeTierUpdated(uint256 amount, bool enabled);
     event ResolverUpdated(address indexed newResolver);
     event ProtocolFeeUpdated(uint256 newFeeBps);
@@ -131,6 +134,7 @@ contract ChainPongEscrow {
         require(_feeBps <= 1000, "Fee too high"); // max 10%
 
         owner = msg.sender;
+        revenueWallet = msg.sender;   // Default: owner receives earnings (change via setRevenueWallet)
         resolver = _resolver;
         protocolFeeBps = _feeBps;
         minStake = 0.001 ether;
@@ -230,6 +234,7 @@ contract ChainPongEscrow {
         playerPerks[msg.sender][perkId] = true;
         p.totalSold++;
         totalDeveloperEarnings += msg.value;    // 100% to dev earnings
+        totalPerkRevenue += msg.value;          // Track perk revenue separately
 
         emit PerkPurchased(perkId, msg.sender, msg.value);
     }
@@ -315,6 +320,7 @@ contract ChainPongEscrow {
     /**
      * @notice Withdraw accumulated developer earnings (match fees + perk sales).
      *         Pull-over-push: one gas-efficient tx to collect all revenue.
+     *         Sends to revenueWallet (not necessarily the owner).
      *         Check-Effects-Interactions: totalDeveloperEarnings is zeroed
      *         BEFORE the external call to prevent reentrancy.
      */
@@ -326,11 +332,23 @@ contract ChainPongEscrow {
         totalDeveloperEarnings = 0;
         totalWithdrawn += amount;
 
-        // Interactions: send ETH to owner
-        (bool sent, ) = payable(owner).call{value: amount}("");
+        // Interactions: send ETH to revenueWallet (your MetaMask buffer wallet)
+        (bool sent, ) = payable(revenueWallet).call{value: amount}("");
         require(sent, "Withdraw failed");
 
-        emit EarningsWithdrawn(owner, amount);
+        emit EarningsWithdrawn(revenueWallet, amount);
+    }
+
+    /**
+     * @notice Change the revenue wallet address.
+     *         Use a MetaMask "buffer" wallet — NOT a CEX address.
+     *         You can switch to a CEX address later once you've verified
+     *         that Base deposits work correctly on that exchange.
+     */
+    function setRevenueWallet(address _newWallet) external onlyOwner {
+        require(_newWallet != address(0), "Invalid address");
+        revenueWallet = _newWallet;
+        emit RevenueWalletUpdated(_newWallet);
     }
 
     // ══════════════════════════════════════════════════════
@@ -426,6 +444,23 @@ contract ChainPongEscrow {
 
     function hasPerk(address player, uint256 perkId) external view returns (bool) {
         return playerPerks[player][perkId];
+    }
+
+    /**
+     * @notice Get a full revenue breakdown for accounting/auditing.
+     */
+    function getRevenueBreakdown() external view returns (
+        uint256 matchFees,
+        uint256 perkRevenue,
+        uint256 pendingWithdrawal,
+        uint256 alreadyWithdrawn
+    ) {
+        perkRevenue = totalPerkRevenue;
+        matchFees = totalDeveloperEarnings > totalPerkRevenue
+            ? totalDeveloperEarnings - totalPerkRevenue
+            : 0;
+        pendingWithdrawal = totalDeveloperEarnings;
+        alreadyWithdrawn = totalWithdrawn;
     }
 
     // Allow contract to receive ETH directly

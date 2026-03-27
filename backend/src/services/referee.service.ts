@@ -180,6 +180,19 @@ export async function resolveMatchOnChain(
     // Continue with settlement attempt — contract will reject if invalid
   }
 
+  // ── Gas check: ensure admin wallet has ETH for gas ─
+  try {
+    const adminBalance = await provider.getBalance(adminSigner.address);
+    const minGas = ethers.parseEther('0.0005'); // ~$0.01 minimum
+    if (adminBalance < minGas) {
+      console.error(`[REFEREE] ⚠️ ADMIN WALLET LOW ON GAS: ${ethers.formatEther(adminBalance)} ETH`);
+      console.error(`[REFEREE]    Top up ${adminSigner.address} with at least 0.001 ETH`);
+      return { success: false, error: 'Admin wallet has insufficient gas. Top up required.' };
+    }
+  } catch (err: any) {
+    console.warn('[REFEREE] Could not check admin balance:', err.message);
+  }
+
   // ── Send settleMatch transaction ──────────────────
   try {
     console.log(`[REFEREE] Settling match ${matchId} → winner: ${winnerAddress}`);

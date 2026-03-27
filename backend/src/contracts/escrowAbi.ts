@@ -271,6 +271,19 @@ export const ESCROW_ABI = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newWallet",
+        "type": "address"
+      }
+    ],
+    "name": "RevenueWalletUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": false,
         "internalType": "uint256",
         "name": "amount",
@@ -482,6 +495,34 @@ export const ESCROW_ABI = [
         "internalType": "struct ChainPongEscrow.Perk",
         "name": "",
         "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getRevenueBreakdown",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "matchFees",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "perkRevenue",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "pendingWithdrawal",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "alreadyWithdrawn",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -798,6 +839,19 @@ export const ESCROW_ABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "revenueWallet",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -845,6 +899,19 @@ export const ESCROW_ABI = [
       }
     ],
     "name": "setResolver",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_newWallet",
+        "type": "address"
+      }
+    ],
+    "name": "setRevenueWallet",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -901,6 +968,19 @@ export const ESCROW_ABI = [
   {
     "inputs": [],
     "name": "totalMatches",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalPerkRevenue",
     "outputs": [
       {
         "internalType": "uint256",
