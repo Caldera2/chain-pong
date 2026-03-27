@@ -242,6 +242,16 @@ export async function apiPurchaseBoard(boardId: string, txHash?: string) {
   });
 }
 
+export async function apiGetClaimable() {
+  return request<{ claimable: string }>('/player/claimable');
+}
+
+export async function apiClaimEarnings() {
+  return request<{ txHash: string; amount: number }>('/player/claim-earnings', {
+    method: 'POST',
+  });
+}
+
 export async function apiWithdraw(amount: number, toAddress: string) {
   return request('/player/withdraw', {
     method: 'POST',

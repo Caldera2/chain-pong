@@ -399,37 +399,32 @@ export async function submitMatchResult(
       },
     });
 
-    // ── Two-step payout: generate token + auto-execute ──
-    // The payout token serves as a signed audit trail AND can
-    // be used by the frontend to retry via /claim-payout if
-    // the auto-payout below fails.
-    if (isPvp && actualPot > 0) {
-      const winner = await prisma.user.findUnique({
-        where: { id: winnerId! },
-        select: { gameWallet: true, walletAddress: true },
-      });
-      const winnerAddress = winner?.gameWallet || winner?.walletAddress;
+    // ── Record EARNINGS (no ETH moves yet) ────────────
+    // Money stays in treasury until the winner manually claims.
+    // This creates an EARNINGS transaction that increases their
+    // claimable balance. They must go to the Claim Earnings page
+    // to actually receive the ETH.
+    if (isPvp && actualPot > 0 && winnerId) {
+      const protocolFee = actualPot * PROTOCOL_FEE_BPS / 10000;
+      const netEarnings = actualPot - protocolFee;
 
-      if (winnerAddress) {
-        // Generate HMAC-signed payout token
-        payoutToken = generatePayoutToken({
+      await prisma.transaction.create({
+        data: {
+          userId: winnerId,
+          type: 'EARNINGS',
+          amount: new Decimal(netEarnings),
+          status: 'CONFIRMED',
           matchId,
-          winnerId: winnerId!,
-          winnerAddress,
-          potAmount: actualPot,
-          issuedAt: Date.now(),
-        });
-        console.log(`[MATCH] Payout token issued for match ${matchId}`);
+          metadata: {
+            potAmount: actualPot,
+            protocolFee,
+            protocolFeeBps: PROTOCOL_FEE_BPS,
+          },
+          confirmedAt: new Date(),
+        },
+      });
 
-        // Auto-execute payout (idempotent — safe to retry)
-        const result = await executeWinnerPayout(winnerAddress, actualPot, matchId);
-
-        if (!result.success) {
-          console.error(`[MATCH] Auto-payout failed for match ${matchId}: ${result.error}`);
-          // Match is COMPLETED. Winner can retry via POST /claim-payout
-          // with the payoutToken. Idempotency prevents double-pay.
-        }
-      }
+      console.log(`[MATCH] Earnings credited for match ${matchId}: ${netEarnings} ETH to ${winnerId}`);
     }
   }
 

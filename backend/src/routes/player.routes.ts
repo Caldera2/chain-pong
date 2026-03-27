@@ -141,6 +141,37 @@ router.get('/transactions', requireAuth, async (req: AuthRequest, res: Response,
 });
 
 // ─────────────────────────────────────────────────────────
+// GET /api/player/claimable — Get claimable earnings balance
+// ─────────────────────────────────────────────────────────
+router.get('/claimable', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const claimable = await playerService.calculateClaimableBalance(req.user!.userId);
+    res.json({ success: true, data: { claimable: claimable.toFixed(8) } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/player/claim-earnings — Claim accumulated winnings
+//
+// Money stays in treasury until the winner comes here and
+// clicks "Claim". Only then does ETH move on-chain.
+// ─────────────────────────────────────────────────────────
+router.post('/claim-earnings', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await playerService.claimEarnings(req.user!.userId);
+    if (!result.success) {
+      res.status(400).json({ success: false, error: result.error });
+      return;
+    }
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
 // POST /api/player/withdraw — Real on-chain withdrawal
 // ─────────────────────────────────────────────────────────
 router.post('/withdraw', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {

@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors';
 import { Decimal } from '@prisma/client/runtime/library';
 import { getGameWalletSigner } from '../utils/wallet';
+import { executeWinnerPayout } from './payout.service';
 import { env } from '../config/env';
 
 // ─────────────────────────────────────────────────────────
@@ -139,6 +140,81 @@ async function sumTransactions(userId: string, type: string): Promise<number> {
     _sum: { amount: true },
   });
   return Number(result._sum.amount || 0);
+}
+
+// ─────────────────────────────────────────────────────────
+// Get Claimable Earnings (EARNINGS - CLAIM transactions)
+//
+// This is the amount the winner has earned from matches but
+// has NOT yet withdrawn. Money stays in treasury until they
+// go to the Claim Earnings page and claim it.
+// ─────────────────────────────────────────────────────────
+
+export async function calculateClaimableBalance(userId: string): Promise<number> {
+  const [earnings, claims] = await Promise.all([
+    sumTransactions(userId, 'EARNINGS'),
+    sumTransactions(userId, 'CLAIM'),
+  ]);
+  return Math.max(0, earnings - claims);
+}
+
+// ─────────────────────────────────────────────────────────
+// Claim Earnings — send accumulated winnings from treasury
+//
+// Flow: Winner clicks "Claim" → backend verifies claimable
+// amount → sends ETH from treasury to winner's wallet →
+// records CLAIM transaction.
+// ─────────────────────────────────────────────────────────
+
+export async function claimEarnings(userId: string): Promise<{
+  success: boolean;
+  txHash?: string;
+  amount?: number;
+  error?: string;
+}> {
+  // 1. Calculate claimable amount
+  const claimable = await calculateClaimableBalance(userId);
+  if (claimable <= 0) {
+    return { success: false, error: 'No earnings to claim' };
+  }
+
+  // 2. Get winner's wallet address
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { gameWallet: true, walletAddress: true, authMethod: true },
+  });
+  const toAddress = user?.gameWallet || user?.walletAddress;
+  if (!toAddress) {
+    return { success: false, error: 'No wallet address found. Connect a wallet first.' };
+  }
+
+  // 3. Send ETH from treasury to winner
+  try {
+    const result = await executeWinnerPayout(toAddress, claimable, `claim-${userId}-${Date.now()}`);
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Transaction failed' };
+    }
+
+    // 4. Record CLAIM transaction
+    await prisma.transaction.create({
+      data: {
+        userId,
+        type: 'CLAIM',
+        amount: new Decimal(claimable),
+        status: 'CONFIRMED',
+        txHash: result.txHash,
+        metadata: { toAddress },
+        confirmedAt: new Date(),
+      },
+    });
+
+    console.log(`[CLAIM] ${claimable} ETH sent to ${toAddress} for user ${userId}`);
+    return { success: true, txHash: result.txHash, amount: claimable };
+  } catch (err: any) {
+    console.error(`[CLAIM] Failed for user ${userId}:`, err.message);
+    return { success: false, error: err.message || 'Claim failed' };
+  }
 }
 
 // ─────────────────────────────────────────────────────────

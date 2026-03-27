@@ -261,9 +261,11 @@ enum TransactionType {
   WITHDRAWAL
   STAKE_LOCK     // ETH locked for a PvP match
   STAKE_RETURN   // ETH returned (match cancelled)
-  PAYOUT         // winnings from a match
+  PAYOUT         // winnings sent directly (legacy)
+  EARNINGS       // match winnings credited (stays in treasury until claimed)
+  CLAIM          // player claimed accumulated earnings (ETH sent from treasury)
   BOARD_PURCHASE // bought a board
-  PROTOCOL_FEE   // 2.5% match fee collected by platform
+  PROTOCOL_FEE   // 4% match fee collected by platform
 }
 
 enum TxStatus {
