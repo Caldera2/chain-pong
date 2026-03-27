@@ -4,14 +4,25 @@ pragma solidity ^0.8.24;
 /**
  * @title ChainPongEscrow
  * @author Chain Pong Team
- * @notice Trustless escrow for PvP pong matches + perk shop on Base Sepolia.
+ * @notice Trustless escrow for PvP pong matches + perk shop on Base.
+ *
+ * ALL money lives in this contract. There is NO treasury wallet.
  *
  * Architecture:
- * - Pull-over-push: Dev earnings accumulate on-chain, withdrawn in one tx.
+ * - Pull-over-push: Winners claim earnings manually. Dev fees accumulate
+ *   and are withdrawn in batches.
  * - Check-Effects-Interactions: State updated before external calls.
  * - Manual reentrancy guard (cheaper than OZ on L2).
  * - Only authorized resolver (backend) can settle matches.
  * - ETH-only, no ERC-20 support.
+ *
+ * Money flow:
+ *   Player stakes ETH ──→ Contract holds it
+ *   Match settled     ──→ Winner's claimable balance increases (no ETH moves)
+ *                     ──→ 4% fee added to totalDeveloperEarnings
+ *   Winner claims     ──→ Contract sends ETH to winner
+ *   Dev withdraws     ──→ Contract sends accumulated fees to revenueWallet
+ *   Perk purchase     ──→ 100% to totalDeveloperEarnings (stays in contract)
  */
 contract ChainPongEscrow {
 
@@ -23,7 +34,7 @@ contract ChainPongEscrow {
         Empty,        // 0 — slot unused
         WaitingP2,    // 1 — player1 staked, waiting for player2
         Active,       // 2 — both staked, game in progress
-        Settled,      // 3 — winner paid out
+        Settled,      // 3 — winner determined, earnings credited
         Cancelled,    // 4 — refunded
         Disputed      // 5 — flagged for admin review
     }
@@ -51,7 +62,7 @@ contract ChainPongEscrow {
 
     address public owner;
     address public resolver;            // backend address authorized to settle
-    address public revenueWallet;       // where withdrawEarnings() sends ETH (changeable)
+    address public revenueWallet;       // where withdrawEarnings() sends fees
     uint256 public protocolFeeBps;      // basis points (400 = 4%)
     uint256 public minStake;
     uint256 public maxStake;
@@ -64,17 +75,22 @@ contract ChainPongEscrow {
     uint256 public totalDeveloperEarnings;   // Accumulated: match fees + perk sales
     uint256 public totalPerkRevenue;         // Subset: earnings from perk sales only
     uint256 public totalWithdrawn;           // Running total of dev withdrawals
+    uint256 public totalPlayerClaimed;       // Running total of player claims
+
+    // ── Player Balances (claim-based) ───────────────────
+    mapping(address => uint256)   public claimableBalance;      // unclaimed winnings
+    mapping(address => uint256)   public playerTotalWinnings;   // lifetime stat
+    mapping(address => uint256)   public playerTotalClaimed;    // lifetime claimed
 
     // ── Mappings ─────────────────────────────────────────
     mapping(bytes32 => Match)     public matches;
     mapping(address => uint256)   public playerMatchCount;
-    mapping(address => uint256)   public playerTotalWinnings;
     mapping(uint256 => bool)      public validStakes;
 
     // ── Perk Shop ────────────────────────────────────────
     uint256 public perkCount;
-    mapping(uint256 => Perk)                public perks;         // perkId => Perk
-    mapping(address => mapping(uint256 => bool)) public playerPerks;  // player => perkId => owned
+    mapping(uint256 => Perk)                public perks;
+    mapping(address => mapping(uint256 => bool)) public playerPerks;
 
     bool private _locked;
 
@@ -89,6 +105,7 @@ contract ChainPongEscrow {
     event MatchCancelled(bytes32 indexed matchId, address indexed player);
     event MatchDisputed(bytes32 indexed matchId);
 
+    event WinningsClaimed(address indexed player, uint256 amount);
     event PerkCreated(uint256 indexed perkId, uint256 price);
     event PerkPurchased(uint256 indexed perkId, address indexed buyer, uint256 price);
     event PerkUpdated(uint256 indexed perkId, uint256 price, bool active);
@@ -134,14 +151,13 @@ contract ChainPongEscrow {
         require(_feeBps <= 1000, "Fee too high"); // max 10%
 
         owner = msg.sender;
-        revenueWallet = msg.sender;   // Default: owner receives earnings (change via setRevenueWallet)
+        revenueWallet = msg.sender;
         resolver = _resolver;
         protocolFeeBps = _feeBps;
         minStake = 0.001 ether;
         maxStake = 0.05 ether;
         disputeTimeout = 24 hours;
 
-        // Initialize valid stake tiers
         validStakes[0.001 ether] = true;
         validStakes[0.002 ether] = true;
         validStakes[0.005 ether] = true;
@@ -155,8 +171,7 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Create a match and stake ETH.
-     * @param matchId Server-generated unique match identifier (bytes32).
+     * @notice Create a match and stake ETH. Money goes into the contract.
      */
     function createMatch(bytes32 matchId) external payable whenNotPaused nonReentrant {
         require(matches[matchId].state == MatchState.Empty, "Match ID exists");
@@ -182,7 +197,7 @@ contract ChainPongEscrow {
 
     /**
      * @notice Join an existing match by staking the same amount.
-     *         Emits MatchReady for the backend to start the game.
+     *         Money goes into the contract. Emits MatchReady.
      */
     function joinMatch(bytes32 matchId) external payable whenNotPaused nonReentrant {
         Match storage m = matches[matchId];
@@ -217,12 +232,36 @@ contract ChainPongEscrow {
     }
 
     // ══════════════════════════════════════════════════════
+    // PLAYER ACTIONS — CLAIM WINNINGS
+    // ══════════════════════════════════════════════════════
+
+    /**
+     * @notice Claim all accumulated winnings. Pull-over-push pattern.
+     *         Winner must come here and call this to receive their ETH.
+     *         Money stays in the contract until this is called.
+     */
+    function claimWinnings() external nonReentrant {
+        uint256 amount = claimableBalance[msg.sender];
+        require(amount > 0, "Nothing to claim");
+
+        // Effects BEFORE interactions (CEI pattern)
+        claimableBalance[msg.sender] = 0;
+        playerTotalClaimed[msg.sender] += amount;
+        totalPlayerClaimed += amount;
+
+        // Interactions: send ETH
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "Claim failed");
+
+        emit WinningsClaimed(msg.sender, amount);
+    }
+
+    // ══════════════════════════════════════════════════════
     // PLAYER ACTIONS — PERK SHOP
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Purchase a perk (board). 100% of ETH goes to developer earnings.
-     * @param perkId The ID of the perk to buy.
+     * @notice Purchase a perk (board). 100% stays in contract as dev earnings.
      */
     function buyPerk(uint256 perkId) external payable whenNotPaused nonReentrant {
         Perk storage p = perks[perkId];
@@ -230,11 +269,10 @@ contract ChainPongEscrow {
         require(msg.value == p.price, "Wrong price");
         require(!playerPerks[msg.sender][perkId], "Already owned");
 
-        // Check-Effects-Interactions: state first, then no external call needed
         playerPerks[msg.sender][perkId] = true;
         p.totalSold++;
-        totalDeveloperEarnings += msg.value;    // 100% to dev earnings
-        totalPerkRevenue += msg.value;          // Track perk revenue separately
+        totalDeveloperEarnings += msg.value;
+        totalPerkRevenue += msg.value;
 
         emit PerkPurchased(perkId, msg.sender, msg.value);
     }
@@ -244,16 +282,16 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Settle a match — pay winner, accumulate protocol fee.
-     * @param matchId The match to settle.
-     * @param _winner Address of the winning player.
+     * @notice Settle a match — credit winner's claimable balance.
+     *         NO ETH is transferred here. Winner must call claimWinnings().
+     *         4% fee is added to totalDeveloperEarnings.
      */
     function settleMatch(bytes32 matchId, address _winner) external onlyResolver nonReentrant {
         Match storage m = matches[matchId];
         require(m.state == MatchState.Active, "Not active");
         require(_winner == m.player1 || _winner == m.player2, "Invalid winner");
 
-        // ── Check-Effects ────────────────────────────
+        // ── Check-Effects (NO interactions — money stays in contract) ──
         m.winner = _winner;
         m.state = MatchState.Settled;
         m.settledAt = block.timestamp;
@@ -262,12 +300,9 @@ contract ChainPongEscrow {
         uint256 fee = (pot * protocolFeeBps) / 10000;
         uint256 payout = pot - fee;
 
-        totalDeveloperEarnings += fee;          // Accumulate fee (pull pattern)
-        playerTotalWinnings[_winner] += payout;
-
-        // ── Interactions ─────────────────────────────
-        (bool sent, ) = payable(_winner).call{value: payout}("");
-        require(sent, "Payout failed");
+        totalDeveloperEarnings += fee;
+        claimableBalance[_winner] += payout;       // Credit winner (no ETH moves)
+        playerTotalWinnings[_winner] += payout;     // Lifetime stat
 
         emit MatchSettled(matchId, _winner, payout, fee);
     }
@@ -290,6 +325,7 @@ contract ChainPongEscrow {
         require(m.state == MatchState.Disputed, "Not disputed");
 
         if (_winner == address(0)) {
+            // Refund both players
             m.state = MatchState.Cancelled;
             (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
             (bool s2, ) = payable(m.player2).call{value: m.stakeAmount}("");
@@ -304,47 +340,37 @@ contract ChainPongEscrow {
             uint256 pot = m.stakeAmount * 2;
             uint256 fee = (pot * protocolFeeBps) / 10000;
             uint256 payout = pot - fee;
+
             totalDeveloperEarnings += fee;
+            claimableBalance[_winner] += payout;
             playerTotalWinnings[_winner] += payout;
 
-            (bool sent, ) = payable(_winner).call{value: payout}("");
-            require(sent, "Payout failed");
             emit MatchSettled(matchId, _winner, payout, fee);
         }
     }
 
     // ══════════════════════════════════════════════════════
-    // ADMIN — PULL-OVER-PUSH WITHDRAWAL
+    // ADMIN — DEV EARNINGS WITHDRAWAL
     // ══════════════════════════════════════════════════════
 
     /**
      * @notice Withdraw accumulated developer earnings (match fees + perk sales).
      *         Pull-over-push: one gas-efficient tx to collect all revenue.
-     *         Sends to revenueWallet (not necessarily the owner).
-     *         Check-Effects-Interactions: totalDeveloperEarnings is zeroed
-     *         BEFORE the external call to prevent reentrancy.
      */
     function withdrawEarnings() external onlyOwner nonReentrant {
         uint256 amount = totalDeveloperEarnings;
         require(amount > 0, "No earnings to withdraw");
 
-        // Effects: zero out BEFORE transfer (CEI pattern)
+        // Effects BEFORE transfer (CEI pattern)
         totalDeveloperEarnings = 0;
         totalWithdrawn += amount;
 
-        // Interactions: send ETH to revenueWallet (your MetaMask buffer wallet)
         (bool sent, ) = payable(revenueWallet).call{value: amount}("");
         require(sent, "Withdraw failed");
 
         emit EarningsWithdrawn(revenueWallet, amount);
     }
 
-    /**
-     * @notice Change the revenue wallet address.
-     *         Use a MetaMask "buffer" wallet — NOT a CEX address.
-     *         You can switch to a CEX address later once you've verified
-     *         that Base deposits work correctly on that exchange.
-     */
     function setRevenueWallet(address _newWallet) external onlyOwner {
         require(_newWallet != address(0), "Invalid address");
         revenueWallet = _newWallet;
@@ -461,6 +487,21 @@ contract ChainPongEscrow {
             : 0;
         pendingWithdrawal = totalDeveloperEarnings;
         alreadyWithdrawn = totalWithdrawn;
+    }
+
+    /**
+     * @notice Get player's claim summary.
+     */
+    function getPlayerClaimInfo(address player) external view returns (
+        uint256 claimable,
+        uint256 totalWon,
+        uint256 totalClaimed,
+        uint256 matchesPlayed
+    ) {
+        claimable = claimableBalance[player];
+        totalWon = playerTotalWinnings[player];
+        totalClaimed = playerTotalClaimed[player];
+        matchesPlayed = playerMatchCount[player];
     }
 
     // Allow contract to receive ETH directly

@@ -246,6 +246,78 @@ export function useMatchStatus(matchId?: string) {
   return { events, isReady, isSettled };
 }
 
+// ─── useClaimWinnings ───────────────────────────────────
+// Winner calls claimWinnings() on the contract to pull ETH
+export function useClaimWinnings() {
+  const { writeContractAsync } = useWriteContract();
+  const [txHash, setTxHash] = useState<Hex | undefined>();
+  const [status, setStatus] = useState<MatchStatus>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  const { isSuccess, isError } = useWaitForTransactionReceipt({
+    hash: txHash,
+    confirmations: 1,
+  });
+
+  useEffect(() => {
+    if (isSuccess) setStatus('confirmed');
+    if (isError) { setStatus('error'); setError('Claim transaction failed on-chain'); }
+  }, [isSuccess, isError]);
+
+  const claimWinnings = useCallback(async () => {
+    setStatus('pending');
+    setError(null);
+    try {
+      const hash = await writeContractAsync({
+        address: CONTRACT_ADDRESS,
+        abi: ESCROW_ABI,
+        functionName: 'claimWinnings',
+        chainId: ACTIVE_CHAIN.id,
+      });
+      setTxHash(hash);
+      return hash;
+    } catch (err: any) {
+      setStatus('error');
+      const msg = err?.shortMessage || err?.message || 'Claim failed';
+      setError(msg.includes('User rejected') ? 'Transaction rejected' : msg);
+      return undefined;
+    }
+  }, [writeContractAsync]);
+
+  const reset = useCallback(() => {
+    setStatus('idle');
+    setError(null);
+    setTxHash(undefined);
+  }, []);
+
+  return { claimWinnings, status, error, txHash, reset };
+}
+
+// ─── usePlayerClaimInfo ─────────────────────────────────
+// Read player's claimable balance from the contract
+export function usePlayerClaimInfo(playerAddress?: `0x${string}`) {
+  const { data, refetch } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: ESCROW_ABI,
+    functionName: 'getPlayerClaimInfo',
+    args: playerAddress ? [playerAddress] : undefined,
+    query: {
+      enabled: !!playerAddress && isContractDeployed,
+      refetchInterval: 15000, // poll every 15s
+    },
+  });
+
+  const [claimable, totalWon, totalClaimed, matchesPlayed] = (data as [bigint, bigint, bigint, bigint]) || [BigInt(0), BigInt(0), BigInt(0), BigInt(0)];
+
+  return {
+    claimable: Number(claimable) / 1e18,
+    totalWon: Number(totalWon) / 1e18,
+    totalClaimed: Number(totalClaimed) / 1e18,
+    matchesPlayed: Number(matchesPlayed),
+    refetch,
+  };
+}
+
 // ─── useContractStats ───────────────────────────────────
 // Read contract state for dashboard/admin
 export function useContractStats() {
