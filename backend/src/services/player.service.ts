@@ -169,21 +169,31 @@ export async function purchaseBoard(userId: string, boardId: string, txHash?: st
   });
   if (alreadyOwned) throw new ConflictError('You already own this board');
 
-  // Check balance
   const price = Number(board.price);
-  if (price > 0) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { encryptedKey: true, authMethod: true },
+  });
+  const isWalletUser = user?.authMethod === 'WALLET';
+  const hasTxHash = !!txHash; // Wallet user already paid via MetaMask
+
+  // ── Balance check ─────────────────────────────────────
+  // Skip for wallet users who already sent ETH (txHash proves on-chain payment).
+  // Only check game wallet balance for email users who pay from their game wallet.
+  if (price > 0 && !hasTxHash) {
     const balance = await calculateBalance(userId);
     if (balance < price) {
       throw new BadRequestError(`Insufficient balance. Need ${price} ETH, have ${balance.toFixed(6)} ETH`);
     }
   }
 
-  // On-chain: transfer ETH from game wallet to treasury
+  // ── On-chain transfer ─────────────────────────────────
+  // Wallet users: ETH already sent via MetaMask — txHash passed from frontend.
+  // Email users: backend sends ETH from their game wallet to treasury.
   let onChainTxHash: string | undefined = txHash;
-  if (price > 0) {
+  if (price > 0 && !isWalletUser) {
     try {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { encryptedKey: true, authMethod: true } });
-      if (user?.encryptedKey && user.authMethod === 'EMAIL') {
+      if (user?.encryptedKey) {
         const signer = getGameWalletSigner(user.encryptedKey);
         const tx = await signer.sendTransaction({
           to: env.TREASURY_ADDRESS,
@@ -194,7 +204,6 @@ export async function purchaseBoard(userId: string, boardId: string, txHash?: st
       }
     } catch (err: any) {
       console.error('Board purchase on-chain transfer failed:', err.message);
-      // DB purchase still proceeds — ETH deducted from game balance
     }
   }
 
