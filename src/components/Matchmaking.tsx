@@ -2,28 +2,87 @@
 
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
+import { apiCreateMatch } from '@/lib/api';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Loader2, Zap, User } from 'lucide-react';
+import { Loader2, Zap, User, AlertCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 export default function Matchmaking() {
-  const { setScreen, pvpStakeAmount } = useGameStore();
-  const [status, setStatus] = useState('Searching for opponent...');
+  const { setScreen, pvpStakeAmount, selectedBoard, setCurrentMatchId, difficulty } = useGameStore();
+  const [status, setStatus] = useState('Creating match...');
   const [found, setFound] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const matchCreated = useRef(false);
 
   useEffect(() => {
-    const t1 = setTimeout(() => setStatus('Matching skill level...'), 1500);
-    const t2 = setTimeout(() => setStatus('Locking stakes...'), 2500);
-    const t3 = setTimeout(() => {
-      setStatus('Opponent found!');
-      setFound(true);
-    }, 3500);
-    const t4 = setTimeout(() => setScreen('game'), 5000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
-  }, [setScreen]);
+    if (matchCreated.current) return;
+    matchCreated.current = true;
+
+    const createMatch = async () => {
+      try {
+        // Step 1: Create match on backend
+        setStatus('Creating match on server...');
+        const res = await apiCreateMatch(
+          'PVP',
+          selectedBoard || 'classic',
+          pvpStakeAmount,
+          difficulty?.toUpperCase() as 'EASY' | 'MEDIUM' | 'HARD'
+        );
+
+        if (!res.success || !res.data) {
+          setError(res.error || 'Failed to create match');
+          return;
+        }
+
+        const match = res.data as { id: string };
+        setCurrentMatchId(match.id);
+        console.log('[MATCHMAKING] Match created:', match.id);
+
+        // Step 2: Simulate matchmaking (PvP against AI for now)
+        setStatus('Searching for opponent...');
+        await new Promise(r => setTimeout(r, 1500));
+
+        setStatus('Matching skill level...');
+        await new Promise(r => setTimeout(r, 1000));
+
+        setStatus('Locking stakes...');
+        await new Promise(r => setTimeout(r, 1000));
+
+        setStatus('Opponent found!');
+        setFound(true);
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Step 3: Start game
+        setScreen('game');
+      } catch (err: any) {
+        console.error('[MATCHMAKING] Error:', err);
+        setError(err?.message || 'Matchmaking failed');
+      }
+    };
+
+    createMatch();
+  }, [pvpStakeAmount, selectedBoard, difficulty, setCurrentMatchId, setScreen]);
 
   const totalPot = pvpStakeAmount * 2;
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
+        <div className="text-center max-w-sm w-full space-y-4">
+          <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-7 h-7 text-destructive" />
+          </div>
+          <h2 className="font-heading text-lg font-semibold">Matchmaking Failed</h2>
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <Button onClick={() => setScreen('mode-select')} variant="outline" className="mt-4">
+            Back to Mode Select
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4">
@@ -64,7 +123,7 @@ export default function Matchmaking() {
           >
             {status}
           </motion.h2>
-          {!found && <p className="text-xs text-muted-foreground mt-1">Estimated wait: ~3s</p>}
+          {!found && !error && <p className="text-xs text-muted-foreground mt-1">Estimated wait: ~5s</p>}
         </div>
 
         {/* Opponent Card */}
@@ -76,8 +135,8 @@ export default function Matchmaking() {
                   <User className="w-4 h-4 text-red-400" />
                 </div>
                 <div className="text-left">
-                  <p className="text-sm font-medium">BaseChamp</p>
-                  <p className="text-[10px] text-muted-foreground">298W / 45L</p>
+                  <p className="text-sm font-medium">Opponent</p>
+                  <p className="text-[10px] text-muted-foreground">Matched</p>
                 </div>
               </CardContent>
             </Card>
@@ -102,7 +161,7 @@ export default function Matchmaking() {
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground text-center mt-3 pt-3 border-t border-border">
-              Winner takes the full pot
+              Winner takes 96% · 4% protocol fee
             </p>
           </CardContent>
         </Card>

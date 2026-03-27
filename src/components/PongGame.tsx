@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
+import { apiSubmitResult } from '@/lib/api';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
 
 const CANVAS_W = 800;
@@ -59,11 +60,18 @@ export default function PongGame() {
   const boards = useGameStore((s) => s.boards);
   const selectedBoard = useGameStore((s) => s.selectedBoard);
   const pvpStakeAmount = useGameStore((s) => s.pvpStakeAmount);
+  const currentMatchId = useGameStore((s) => s.currentMatchId);
+  const syncFromBackend = useGameStore((s) => s.syncFromBackend);
   // Stable refs for store functions to avoid effect re-runs
   const addWinRef = useRef(addWin);
   addWinRef.current = addWin;
   const addLossRef = useRef(addLoss);
   addLossRef.current = addLoss;
+  const currentMatchIdRef = useRef(currentMatchId);
+  currentMatchIdRef.current = currentMatchId;
+  const syncFromBackendRef = useRef(syncFromBackend);
+  syncFromBackendRef.current = syncFromBackend;
+  const perkUsedRef = useRef(false);
 
   const [playerScore, setPlayerScore] = useState(0);
   const [opponentScore, setOpponentScore] = useState(0);
@@ -97,6 +105,7 @@ export default function PongGame() {
   const activatePerk = useCallback(() => {
     if (perkUsedThisGame || !perkAvailable) return;
     setPerkUsedThisGame(true);
+    perkUsedRef.current = true;
     setPerkActive(true);
     gameStateRef.current.perkActive = true;
     setTimeout(() => {
@@ -462,11 +471,40 @@ export default function PongGame() {
 
       // Check win
       if (pScore >= WIN_SCORE || oScore >= WIN_SCORE) {
-        if (pScore >= WIN_SCORE) {
+        const playerWon = pScore >= WIN_SCORE;
+        if (playerWon) {
           addWinRef.current(winPrize);
         } else {
           addLossRef.current(losePenalty);
         }
+
+        // ── Submit result to backend (async, non-blocking) ──
+        // This triggers: payout to winner, stats update on server,
+        // and the 4% protocol fee to treasury.
+        const matchId = currentMatchIdRef.current;
+        if (matchId) {
+          const finalP1 = pScore;
+          const finalP2 = oScore;
+          // Fire-and-forget: don't block the game over screen
+          apiSubmitResult(matchId, finalP1, finalP2, perkUsedRef.current)
+            .then((res) => {
+              if (res.success) {
+                console.log('[GAME] Match result submitted to backend:', matchId);
+              } else {
+                console.warn('[GAME] Backend result submission failed:', res.error);
+              }
+              // Sync latest stats + balance from server
+              syncFromBackendRef.current();
+            })
+            .catch((err) => {
+              console.error('[GAME] Failed to submit result:', err);
+            });
+        } else {
+          console.warn('[GAME] No matchId — result not submitted to backend');
+          // Still sync to get latest stats
+          syncFromBackendRef.current();
+        }
+
         // Clear active match on completion
         try { localStorage.removeItem('chainpong-active-match'); } catch {}
         running = false;
