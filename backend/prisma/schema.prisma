@@ -274,3 +274,39 @@ enum TxStatus {
   FAILED
   REVERTED
 }
+
+// ═══════════════════════════════════════════════════════
+// NONCE MANAGER (serverless-safe via row lock)
+// ═══════════════════════════════════════════════════════
+
+model NonceState {
+  id            String   @id @default("singleton") // only one row
+  walletAddress String   @unique @map("wallet_address")
+  currentNonce  Int      @map("current_nonce")
+  lockedBy      String?  @map("locked_by")   // instance ID holding the lock
+  lockedAt      DateTime? @map("locked_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("nonce_state")
+}
+
+// ═══════════════════════════════════════════════════════
+// PENDING ON-CHAIN TRANSACTIONS (for sync-match polling)
+// ═══════════════════════════════════════════════════════
+
+model PendingTx {
+  id            String   @id @default(uuid())
+  txHash        String   @unique @map("tx_hash")
+  matchId       String   @map("match_id")
+  txType        String   @map("tx_type") // 'SETTLE' | 'DISPUTE'
+  status        String   @default("PENDING") // PENDING | CONFIRMED | FAILED
+  attempts      Int      @default(0)
+  createdAt     DateTime @default(now()) @map("created_at")
+  confirmedAt   DateTime? @map("confirmed_at")
+  blockNumber   BigInt?  @map("block_number")
+  error         String?
+
+  @@index([status])
+  @@index([matchId])
+  @@map("pending_txs")
+}

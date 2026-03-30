@@ -8,19 +8,20 @@ pragma solidity ^0.8.24;
  *
  * ALL money lives in this contract. There is NO treasury wallet.
  *
- * Architecture:
- * - Pull-over-push: Winners claim earnings manually. Dev fees accumulate
- *   and are withdrawn in batches.
+ * Security features:
+ * - EIP-712 signatures: Backend signs match permits + settlement proofs.
+ *   Contract verifies via ECDSA.recover — not just msg.sender.
+ * - Timeout refunds: Players can refund if no opponent (5min) or no settlement (30min).
+ * - Grace period: Winnings are locked for CLAIM_GRACE_PERIOD before claimable.
+ * - Pull-over-push: Winners claim manually. Dev fees withdrawn in batches.
  * - Check-Effects-Interactions: State updated before external calls.
- * - Manual reentrancy guard (cheaper than OZ on L2).
- * - Only authorized resolver (backend) can settle matches.
- * - ETH-only, no ERC-20 support.
+ * - Manual reentrancy guard.
  *
  * Money flow:
  *   Player stakes ETH ──→ Contract holds it
- *   Match settled     ──→ Winner's claimable balance increases (no ETH moves)
+ *   Match settled     ──→ Winner's claimable balance increases (after grace period)
  *                     ──→ 4% fee added to totalDeveloperEarnings
- *   Winner claims     ──→ Contract sends ETH to winner
+ *   Winner claims     ──→ Contract sends ETH to winner (after grace period)
  *   Dev withdraws     ──→ Contract sends accumulated fees to revenueWallet
  *   Perk purchase     ──→ 100% to totalDeveloperEarnings (stays in contract)
  */
@@ -47,6 +48,7 @@ contract ChainPongEscrow {
         MatchState    state;
         address       winner;
         uint256       createdAt;
+        uint256       joinedAt;         // when player2 joined (for settle timeout)
         uint256       settledAt;
     }
 
@@ -57,11 +59,32 @@ contract ChainPongEscrow {
     }
 
     // ══════════════════════════════════════════════════════
+    // CONSTANTS
+    // ══════════════════════════════════════════════════════
+
+    uint256 public constant CANCEL_TIMEOUT   = 5 minutes;   // No opponent → refund
+    uint256 public constant SETTLE_TIMEOUT   = 30 minutes;  // No settlement → refund
+    uint256 public constant CLAIM_GRACE_PERIOD = 1 hours;   // Winnings locked before claimable
+
+    // EIP-712 domain separator components
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+    bytes32 public constant MATCH_PERMIT_TYPEHASH = keccak256(
+        "MatchPermit(bytes32 matchId,address player,uint256 stakeAmount,uint256 deadline)"
+    );
+    bytes32 public constant SETTLE_PROOF_TYPEHASH = keccak256(
+        "SettleProof(bytes32 matchId,address winner,uint256 player1Score,uint256 player2Score,uint256 deadline)"
+    );
+
+    bytes32 public immutable DOMAIN_SEPARATOR;
+
+    // ══════════════════════════════════════════════════════
     // STATE
     // ══════════════════════════════════════════════════════
 
     address public owner;
-    address public resolver;            // backend address authorized to settle
+    address public resolver;            // backend address — signs EIP-712 proofs
     address public revenueWallet;       // where withdrawEarnings() sends fees
     uint256 public protocolFeeBps;      // basis points (400 = 4%)
     uint256 public minStake;
@@ -77,8 +100,9 @@ contract ChainPongEscrow {
     uint256 public totalWithdrawn;           // Running total of dev withdrawals
     uint256 public totalPlayerClaimed;       // Running total of player claims
 
-    // ── Player Balances (claim-based) ───────────────────
+    // ── Player Balances (claim-based with grace period) ──
     mapping(address => uint256)   public claimableBalance;      // unclaimed winnings
+    mapping(address => uint256)   public claimableAfter;        // timestamp: when claims unlock
     mapping(address => uint256)   public playerTotalWinnings;   // lifetime stat
     mapping(address => uint256)   public playerTotalClaimed;    // lifetime claimed
 
@@ -86,6 +110,7 @@ contract ChainPongEscrow {
     mapping(bytes32 => Match)     public matches;
     mapping(address => uint256)   public playerMatchCount;
     mapping(uint256 => bool)      public validStakes;
+    mapping(bytes32 => bool)      public usedPermits;           // prevent permit replay
 
     // ── Perk Shop ────────────────────────────────────────
     uint256 public perkCount;
@@ -102,7 +127,7 @@ contract ChainPongEscrow {
     event MatchJoined(bytes32 indexed matchId, address indexed player2);
     event MatchReady(bytes32 indexed matchId, address player1, address player2, uint256 stakeAmount);
     event MatchSettled(bytes32 indexed matchId, address indexed winner, uint256 payout, uint256 fee);
-    event MatchCancelled(bytes32 indexed matchId, address indexed player);
+    event MatchCancelled(bytes32 indexed matchId, address indexed player, string reason);
     event MatchDisputed(bytes32 indexed matchId);
 
     event WinningsClaimed(address indexed player, uint256 amount);
@@ -115,6 +140,7 @@ contract ChainPongEscrow {
     event StakeTierUpdated(uint256 amount, bool enabled);
     event ResolverUpdated(address indexed newResolver);
     event ProtocolFeeUpdated(uint256 newFeeBps);
+    event GlobalPause(bool paused, address triggeredBy);
 
     // ══════════════════════════════════════════════════════
     // MODIFIERS
@@ -164,6 +190,103 @@ contract ChainPongEscrow {
         validStakes[0.01 ether]  = true;
         validStakes[0.02 ether]  = true;
         validStakes[0.05 ether]  = true;
+
+        DOMAIN_SEPARATOR = keccak256(abi.encode(
+            DOMAIN_TYPEHASH,
+            keccak256("ChainPongEscrow"),
+            keccak256("1"),
+            block.chainid,
+            address(this)
+        ));
+    }
+
+    // ══════════════════════════════════════════════════════
+    // EIP-712 SIGNATURE VERIFICATION
+    // ══════════════════════════════════════════════════════
+
+    /**
+     * @notice Verify an EIP-712 match permit signed by the resolver.
+     *         Frontend must obtain this permit from the backend before
+     *         calling createMatch/joinMatch. Prevents ghost matches.
+     */
+    function _verifyMatchPermit(
+        bytes32 matchId,
+        address player,
+        uint256 stakeAmount,
+        uint256 deadline,
+        bytes memory signature
+    ) internal {
+        require(block.timestamp <= deadline, "Permit expired");
+
+        bytes32 permitHash = keccak256(abi.encode(
+            MATCH_PERMIT_TYPEHASH,
+            matchId,
+            player,
+            stakeAmount,
+            deadline
+        ));
+
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, permitHash));
+
+        // Prevent replay
+        require(!usedPermits[digest], "Permit already used");
+        usedPermits[digest] = true;
+
+        address signer = _recover(digest, signature);
+        require(signer == resolver, "Invalid permit signature");
+    }
+
+    /**
+     * @notice Verify an EIP-712 settle proof signed by the resolver.
+     *         Even though settleMatch uses onlyResolver, this provides
+     *         a cryptographic audit trail that can't be forged.
+     */
+    function _verifySettleProof(
+        bytes32 matchId,
+        address winner,
+        uint256 player1Score,
+        uint256 player2Score,
+        uint256 deadline,
+        bytes memory signature
+    ) internal view {
+        require(block.timestamp <= deadline, "Proof expired");
+
+        bytes32 proofHash = keccak256(abi.encode(
+            SETTLE_PROOF_TYPEHASH,
+            matchId,
+            winner,
+            player1Score,
+            player2Score,
+            deadline
+        ));
+
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, proofHash));
+        address signer = _recover(digest, signature);
+        require(signer == resolver, "Invalid settle signature");
+    }
+
+    /**
+     * @notice ECDSA recover — extracts signer from digest + signature.
+     */
+    function _recover(bytes32 digest, bytes memory sig) internal pure returns (address) {
+        require(sig.length == 65, "Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        if (v < 27) v += 27;
+        require(v == 27 || v == 28, "Invalid signature v");
+
+        address signer = ecrecover(digest, v, r, s);
+        require(signer != address(0), "Invalid signature");
+        return signer;
     }
 
     // ══════════════════════════════════════════════════════
@@ -171,11 +294,19 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Create a match and stake ETH. Money goes into the contract.
+     * @notice Create a match with a backend-signed permit.
+     *         Prevents ghost matches — only pre-approved players can stake.
      */
-    function createMatch(bytes32 matchId) external payable whenNotPaused nonReentrant {
+    function createMatch(
+        bytes32 matchId,
+        uint256 deadline,
+        bytes calldata permit
+    ) external payable whenNotPaused nonReentrant {
         require(matches[matchId].state == MatchState.Empty, "Match ID exists");
         require(validStakes[msg.value], "Invalid stake amount");
+
+        // Verify backend approved this match creation
+        _verifyMatchPermit(matchId, msg.sender, msg.value, deadline, permit);
 
         matches[matchId] = Match({
             id: matchId,
@@ -185,6 +316,7 @@ contract ChainPongEscrow {
             state: MatchState.WaitingP2,
             winner: address(0),
             createdAt: block.timestamp,
+            joinedAt: 0,
             settledAt: 0
         });
 
@@ -196,17 +328,24 @@ contract ChainPongEscrow {
     }
 
     /**
-     * @notice Join an existing match by staking the same amount.
-     *         Money goes into the contract. Emits MatchReady.
+     * @notice Join an existing match with a backend-signed permit.
      */
-    function joinMatch(bytes32 matchId) external payable whenNotPaused nonReentrant {
+    function joinMatch(
+        bytes32 matchId,
+        uint256 deadline,
+        bytes calldata permit
+    ) external payable whenNotPaused nonReentrant {
         Match storage m = matches[matchId];
         require(m.state == MatchState.WaitingP2, "Not joinable");
         require(msg.sender != m.player1, "Can't play yourself");
         require(msg.value == m.stakeAmount, "Stake mismatch");
 
+        // Verify backend approved this player joining
+        _verifyMatchPermit(matchId, msg.sender, msg.value, deadline, permit);
+
         m.player2 = msg.sender;
         m.state = MatchState.Active;
+        m.joinedAt = block.timestamp;
 
         playerMatchCount[msg.sender]++;
         totalVolume += msg.value;
@@ -215,8 +354,13 @@ contract ChainPongEscrow {
         emit MatchReady(matchId, m.player1, msg.sender, m.stakeAmount);
     }
 
+    // ══════════════════════════════════════════════════════
+    // PLAYER ACTIONS — CANCEL / REFUND
+    // ══════════════════════════════════════════════════════
+
     /**
-     * @notice Cancel a match before an opponent joins. Refunds stake.
+     * @notice Cancel a match before an opponent joins.
+     *         Player 1 can cancel anytime while waiting.
      */
     function cancelMatch(bytes32 matchId) external nonReentrant {
         Match storage m = matches[matchId];
@@ -228,7 +372,61 @@ contract ChainPongEscrow {
         (bool sent, ) = payable(msg.sender).call{value: m.stakeAmount}("");
         require(sent, "Refund failed");
 
-        emit MatchCancelled(matchId, msg.sender);
+        emit MatchCancelled(matchId, msg.sender, "Player cancelled");
+    }
+
+    /**
+     * @notice Request a refund when the match is stuck.
+     *
+     * Two timeout scenarios:
+     * 1. No opponent joined within CANCEL_TIMEOUT (5 min) → player1 gets refund
+     * 2. Opponent joined but backend hasn't settled within SETTLE_TIMEOUT (30 min)
+     *    → BOTH players get refunded
+     *
+     * Cannot be called once settleMatch has run (state = Settled).
+     */
+    function requestRefund(bytes32 matchId) external nonReentrant {
+        Match storage m = matches[matchId];
+
+        // ── Scenario 1: No opponent joined after 5 minutes ──
+        if (m.state == MatchState.WaitingP2) {
+            require(m.player1 == msg.sender, "Not your match");
+            require(
+                block.timestamp > m.createdAt + CANCEL_TIMEOUT,
+                "Wait 5 minutes before requesting refund"
+            );
+
+            m.state = MatchState.Cancelled;
+
+            (bool sent, ) = payable(m.player1).call{value: m.stakeAmount}("");
+            require(sent, "Refund failed");
+
+            emit MatchCancelled(matchId, msg.sender, "No opponent timeout");
+            return;
+        }
+
+        // ── Scenario 2: Both joined but no settlement after 30 minutes ──
+        if (m.state == MatchState.Active) {
+            require(
+                msg.sender == m.player1 || msg.sender == m.player2,
+                "Not a participant"
+            );
+            require(
+                block.timestamp > m.joinedAt + SETTLE_TIMEOUT,
+                "Wait 30 minutes before requesting refund"
+            );
+
+            m.state = MatchState.Cancelled;
+
+            (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
+            (bool s2, ) = payable(m.player2).call{value: m.stakeAmount}("");
+            require(s1 && s2, "Refund failed");
+
+            emit MatchCancelled(matchId, address(0), "Settlement timeout");
+            return;
+        }
+
+        revert("Match not eligible for refund");
     }
 
     // ══════════════════════════════════════════════════════
@@ -236,13 +434,18 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Claim all accumulated winnings. Pull-over-push pattern.
-     *         Winner must come here and call this to receive their ETH.
-     *         Money stays in the contract until this is called.
+     * @notice Claim all accumulated winnings after the grace period.
+     *
+     * Grace period (1 hour) gives the owner time to pause the contract
+     * if the leaderboard looks suspicious before funds leave.
      */
-    function claimWinnings() external nonReentrant {
+    function claimWinnings() external nonReentrant whenNotPaused {
         uint256 amount = claimableBalance[msg.sender];
         require(amount > 0, "Nothing to claim");
+        require(
+            block.timestamp >= claimableAfter[msg.sender],
+            "Grace period active - try again later"
+        );
 
         // Effects BEFORE interactions (CEI pattern)
         claimableBalance[msg.sender] = 0;
@@ -282,14 +485,27 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /**
-     * @notice Settle a match — credit winner's claimable balance.
-     *         NO ETH is transferred here. Winner must call claimWinnings().
-     *         4% fee is added to totalDeveloperEarnings.
+     * @notice Settle a match with an EIP-712 signed proof.
+     *         The resolver (backend) must provide a cryptographic proof
+     *         containing match scores. This serves as an audit trail.
+     *
+     *         NO ETH is transferred here. Winner's claimable balance is
+     *         credited, subject to CLAIM_GRACE_PERIOD.
      */
-    function settleMatch(bytes32 matchId, address _winner) external onlyResolver nonReentrant {
+    function settleMatch(
+        bytes32 matchId,
+        address _winner,
+        uint256 player1Score,
+        uint256 player2Score,
+        uint256 deadline,
+        bytes calldata proof
+    ) external onlyResolver nonReentrant {
         Match storage m = matches[matchId];
         require(m.state == MatchState.Active, "Not active");
         require(_winner == m.player1 || _winner == m.player2, "Invalid winner");
+
+        // Verify EIP-712 cryptographic proof from the backend
+        _verifySettleProof(matchId, _winner, player1Score, player2Score, deadline, proof);
 
         // ── Check-Effects (NO interactions — money stays in contract) ──
         m.winner = _winner;
@@ -301,8 +517,14 @@ contract ChainPongEscrow {
         uint256 payout = pot - fee;
 
         totalDeveloperEarnings += fee;
-        claimableBalance[_winner] += payout;       // Credit winner (no ETH moves)
-        playerTotalWinnings[_winner] += payout;     // Lifetime stat
+        claimableBalance[_winner] += payout;
+        playerTotalWinnings[_winner] += payout;
+
+        // Grace period: winner can't claim for 1 hour (gives admin time to review)
+        uint256 unlockTime = block.timestamp + CLAIM_GRACE_PERIOD;
+        if (unlockTime > claimableAfter[_winner]) {
+            claimableAfter[_winner] = unlockTime;
+        }
 
         emit MatchSettled(matchId, _winner, payout, fee);
     }
@@ -325,12 +547,11 @@ contract ChainPongEscrow {
         require(m.state == MatchState.Disputed, "Not disputed");
 
         if (_winner == address(0)) {
-            // Refund both players
             m.state = MatchState.Cancelled;
             (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
             (bool s2, ) = payable(m.player2).call{value: m.stakeAmount}("");
             require(s1 && s2, "Refund failed");
-            emit MatchCancelled(matchId, address(0));
+            emit MatchCancelled(matchId, address(0), "Dispute refund");
         } else {
             require(_winner == m.player1 || _winner == m.player2, "Invalid winner");
             m.winner = _winner;
@@ -345,6 +566,11 @@ contract ChainPongEscrow {
             claimableBalance[_winner] += payout;
             playerTotalWinnings[_winner] += payout;
 
+            uint256 unlockTime = block.timestamp + CLAIM_GRACE_PERIOD;
+            if (unlockTime > claimableAfter[_winner]) {
+                claimableAfter[_winner] = unlockTime;
+            }
+
             emit MatchSettled(matchId, _winner, payout, fee);
         }
     }
@@ -353,15 +579,10 @@ contract ChainPongEscrow {
     // ADMIN — DEV EARNINGS WITHDRAWAL
     // ══════════════════════════════════════════════════════
 
-    /**
-     * @notice Withdraw accumulated developer earnings (match fees + perk sales).
-     *         Pull-over-push: one gas-efficient tx to collect all revenue.
-     */
     function withdrawEarnings() external onlyOwner nonReentrant {
         uint256 amount = totalDeveloperEarnings;
         require(amount > 0, "No earnings to withdraw");
 
-        // Effects BEFORE transfer (CEI pattern)
         totalDeveloperEarnings = 0;
         totalWithdrawn += amount;
 
@@ -411,13 +632,33 @@ contract ChainPongEscrow {
         emit ProtocolFeeUpdated(_feeBps);
     }
 
+    function setMinStake(uint256 _minStake) external onlyOwner {
+        require(_minStake > 0, "Min stake must be > 0");
+        require(_minStake <= maxStake, "Min > max");
+        minStake = _minStake;
+    }
+
+    function setMaxStake(uint256 _maxStake) external onlyOwner {
+        require(_maxStake >= minStake, "Max < min");
+        maxStake = _maxStake;
+    }
+
     function setStakeTier(uint256 amount, bool enabled) external onlyOwner {
         validStakes[amount] = enabled;
         emit StakeTierUpdated(amount, enabled);
     }
 
+    /**
+     * @notice Global pause toggle. When paused:
+     *         - No new matches can be created/joined
+     *         - No perks can be bought
+     *         - No winnings can be claimed
+     *         - Refunds still work (requestRefund, cancelMatch)
+     *         - Owner can still withdraw dev earnings
+     */
     function setPaused(bool _paused) external onlyOwner {
         paused = _paused;
+        emit GlobalPause(_paused, msg.sender);
     }
 
     function setDisputeTimeout(uint256 _timeout) external onlyOwner {
@@ -442,10 +683,17 @@ contract ChainPongEscrow {
         require(block.timestamp > m.createdAt + disputeTimeout, "Timeout not reached");
 
         m.state = MatchState.Cancelled;
-        (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
-        (bool s2, ) = payable(m.player2).call{value: m.stakeAmount}("");
-        require(s1 && s2, "Refund failed");
-        emit MatchCancelled(matchId, address(0));
+
+        if (m.player2 != address(0)) {
+            (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
+            (bool s2, ) = payable(m.player2).call{value: m.stakeAmount}("");
+            require(s1 && s2, "Refund failed");
+        } else {
+            (bool s1, ) = payable(m.player1).call{value: m.stakeAmount}("");
+            require(s1, "Refund failed");
+        }
+
+        emit MatchCancelled(matchId, address(0), "Emergency cancel");
     }
 
     // ══════════════════════════════════════════════════════
@@ -472,9 +720,6 @@ contract ChainPongEscrow {
         return playerPerks[player][perkId];
     }
 
-    /**
-     * @notice Get a full revenue breakdown for accounting/auditing.
-     */
     function getRevenueBreakdown() external view returns (
         uint256 matchFees,
         uint256 perkRevenue,
@@ -489,21 +734,19 @@ contract ChainPongEscrow {
         alreadyWithdrawn = totalWithdrawn;
     }
 
-    /**
-     * @notice Get player's claim summary.
-     */
     function getPlayerClaimInfo(address player) external view returns (
         uint256 claimable,
+        uint256 unlockTimestamp,
         uint256 totalWon,
         uint256 totalClaimed,
         uint256 matchesPlayed
     ) {
         claimable = claimableBalance[player];
+        unlockTimestamp = claimableAfter[player];
         totalWon = playerTotalWinnings[player];
         totalClaimed = playerTotalClaimed[player];
         matchesPlayed = playerMatchCount[player];
     }
 
-    // Allow contract to receive ETH directly
     receive() external payable {}
 }

@@ -38,6 +38,25 @@ export const ESCROW_ABI = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "paused",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "triggeredBy",
+        "type": "address"
+      }
+    ],
+    "name": "GlobalPause",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": true,
         "internalType": "bytes32",
         "name": "matchId",
@@ -48,6 +67,12 @@ export const ESCROW_ABI = [
         "internalType": "address",
         "name": "player",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
       }
     ],
     "name": "MatchCancelled",
@@ -319,6 +344,97 @@ export const ESCROW_ABI = [
     "type": "event"
   },
   {
+    "inputs": [],
+    "name": "CANCEL_TIMEOUT",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "CLAIM_GRACE_PERIOD",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "DOMAIN_SEPARATOR",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "DOMAIN_TYPEHASH",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MATCH_PERMIT_TYPEHASH",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "SETTLE_PROOF_TYPEHASH",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "SETTLE_TIMEOUT",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -359,6 +475,25 @@ export const ESCROW_ABI = [
         "type": "address"
       }
     ],
+    "name": "claimableAfter",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
     "name": "claimableBalance",
     "outputs": [
       {
@@ -376,6 +511,16 @@ export const ESCROW_ABI = [
         "internalType": "bytes32",
         "name": "matchId",
         "type": "bytes32"
+      },
+      {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "permit",
+        "type": "bytes"
       }
     ],
     "name": "createMatch",
@@ -497,6 +642,11 @@ export const ESCROW_ABI = [
           },
           {
             "internalType": "uint256",
+            "name": "joinedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
             "name": "settledAt",
             "type": "uint256"
           }
@@ -558,6 +708,11 @@ export const ESCROW_ABI = [
       {
         "internalType": "uint256",
         "name": "claimable",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "unlockTimestamp",
         "type": "uint256"
       },
       {
@@ -656,6 +811,16 @@ export const ESCROW_ABI = [
         "internalType": "bytes32",
         "name": "matchId",
         "type": "bytes32"
+      },
+      {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "permit",
+        "type": "bytes"
       }
     ],
     "name": "joinMatch",
@@ -706,6 +871,11 @@ export const ESCROW_ABI = [
       {
         "internalType": "uint256",
         "name": "createdAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "joinedAt",
         "type": "uint256"
       },
       {
@@ -911,6 +1081,19 @@ export const ESCROW_ABI = [
         "internalType": "bytes32",
         "name": "matchId",
         "type": "bytes32"
+      }
+    ],
+    "name": "requestRefund",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "matchId",
+        "type": "bytes32"
       },
       {
         "internalType": "address",
@@ -958,6 +1141,32 @@ export const ESCROW_ABI = [
       }
     ],
     "name": "setDisputeTimeout",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_maxStake",
+        "type": "uint256"
+      }
+    ],
+    "name": "setMaxStake",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_minStake",
+        "type": "uint256"
+      }
+    ],
+    "name": "setMinStake",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1043,6 +1252,26 @@ export const ESCROW_ABI = [
         "internalType": "address",
         "name": "_winner",
         "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "player1Score",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "player2Score",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "proof",
+        "type": "bytes"
       }
     ],
     "name": "settleMatch",
@@ -1162,6 +1391,25 @@ export const ESCROW_ABI = [
     "name": "updatePerk",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "name": "usedPermits",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

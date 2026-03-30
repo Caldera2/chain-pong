@@ -3,8 +3,10 @@ import rateLimit from 'express-rate-limit';
 import { requireAuth } from '../middleware/auth';
 import { validateMatchResultRequest } from '../middleware/security';
 import * as matchService from '../services/match.service';
+import { signMatchPermit, isRefereeActive } from '../services/referee.service';
 import { createMatchSchema, submitResultSchema } from '../utils/validators';
 import { AuthRequest } from '../types';
+import { parseEther } from 'ethers';
 
 const router = Router();
 
@@ -17,6 +19,38 @@ const payoutLimiter = rateLimit({
   message: { success: false, error: 'Too many payout attempts. Try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/matches/:id/permit — Get EIP-712 match permit
+//
+// Frontend calls this BEFORE calling the contract. The backend
+// signs an EIP-712 MatchPermit that the contract verifies.
+// This prevents ghost matches (unauthorized staking).
+// ─────────────────────────────────────────────────────────
+router.post('/:id/permit', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!isRefereeActive()) {
+      res.status(503).json({ success: false, error: 'Contract not configured' });
+      return;
+    }
+
+    const { playerAddress, stakeAmountWei } = req.body;
+    if (!playerAddress || !stakeAmountWei) {
+      res.status(400).json({ success: false, error: 'playerAddress and stakeAmountWei required' });
+      return;
+    }
+
+    const result = await signMatchPermit(
+      String(req.params.id),
+      playerAddress,
+      BigInt(stakeAmountWei)
+    );
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // ─────────────────────────────────────────────────────────

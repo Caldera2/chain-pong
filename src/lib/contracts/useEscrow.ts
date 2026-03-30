@@ -3,13 +3,15 @@
 /**
  * Frontend hooks for interacting with ChainPongEscrow contract.
  *
- * Handles:
- * - createMatch: player stakes ETH → contract
- * - joinMatch: opponent stakes ETH → contract
- * - buyPerk: purchase board → 100% to dev earnings
- * - useMatchStatus: listens for contract events (MatchCreated, MatchReady, MatchSettled)
+ * NEW: createMatch/joinMatch now require a backend-signed EIP-712 permit.
+ * The frontend fetches the permit from the backend, then passes it to
+ * the contract. This prevents ghost matches (unauthorized staking).
  *
- * All write operations wait for tx receipt before updating UI.
+ * Flow:
+ * 1. Frontend calls backend → GET /api/matches/:id/permit
+ * 2. Backend signs EIP-712 MatchPermit → returns { signature, deadline }
+ * 3. Frontend calls contract.createMatch(matchId, deadline, signature)
+ * 4. Contract verifies signature via ECDSA.recover
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -24,8 +26,8 @@ import { parseEther, encodeAbiParameters, keccak256, type Hex } from 'viem';
 import { ESCROW_ABI } from './escrowAbi';
 import { ACTIVE_CHAIN } from '../wagmi';
 
-// Contract address — set via env var after deployment
 const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000') as `0x${string}`;
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export const isContractDeployed = CONTRACT_ADDRESS !== '0x0000000000000000000000000000000000000000';
 
@@ -34,6 +36,37 @@ export function matchIdToBytes32(matchId: string): Hex {
   return keccak256(
     encodeAbiParameters([{ type: 'string' }], [matchId])
   );
+}
+
+// ─── Helper: Fetch match permit from backend ────────────
+async function fetchMatchPermit(
+  matchId: string,
+  playerAddress: string,
+  stakeAmountWei: bigint,
+  token: string
+): Promise<{ signature: Hex; deadline: bigint }> {
+  const res = await fetch(`${API_URL}/api/matches/${matchId}/permit`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      playerAddress,
+      stakeAmountWei: stakeAmountWei.toString(),
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to get match permit' }));
+    throw new Error(err.error || 'Failed to get match permit');
+  }
+
+  const data = await res.json();
+  return {
+    signature: data.data.signature as Hex,
+    deadline: BigInt(data.data.deadline),
+  };
 }
 
 // ─── Match Status Types ─────────────────────────────────
@@ -46,9 +79,11 @@ interface MatchEvent {
 }
 
 // ─── useCreateMatch ─────────────────────────────────────
-// Player 1 calls createMatch on the contract
+// 1. Fetch EIP-712 permit from backend
+// 2. Call contract.createMatch(matchId, deadline, permit)
 export function useCreateMatch() {
   const { writeContractAsync } = useWriteContract();
+  const { address } = useAccount();
   const [txHash, setTxHash] = useState<Hex | undefined>();
   const [status, setStatus] = useState<MatchStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -63,16 +98,34 @@ export function useCreateMatch() {
     if (isError) { setStatus('error'); setError('Transaction failed on-chain'); }
   }, [isSuccess, isError]);
 
-  const createMatch = useCallback(async (matchId: string, stakeEth: number) => {
+  const createMatch = useCallback(async (matchId: string, stakeEth: number, authToken?: string) => {
+    if (!address) { setError('Wallet not connected'); return; }
     setStatus('pending');
     setError(null);
+
     try {
+      const stakeWei = parseEther(stakeEth.toString());
+
+      // Fetch EIP-712 permit from backend
+      let permitArgs: { deadline: bigint; signature: Hex } | null = null;
+      if (authToken) {
+        try {
+          permitArgs = await fetchMatchPermit(matchId, address, stakeWei, authToken);
+        } catch (err: any) {
+          console.warn('[ESCROW] Permit fetch failed, proceeding without:', err.message);
+        }
+      }
+
       const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: ESCROW_ABI,
         functionName: 'createMatch',
-        args: [matchIdToBytes32(matchId)],
-        value: parseEther(stakeEth.toString()),
+        args: [
+          matchIdToBytes32(matchId),
+          permitArgs?.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 300),
+          permitArgs?.signature ?? '0x' as Hex,
+        ],
+        value: stakeWei,
         chainId: ACTIVE_CHAIN.id,
       });
       setTxHash(hash);
@@ -83,7 +136,7 @@ export function useCreateMatch() {
       setError(msg.includes('User rejected') ? 'Transaction rejected' : msg);
       return undefined;
     }
-  }, [writeContractAsync]);
+  }, [writeContractAsync, address]);
 
   const reset = useCallback(() => {
     setStatus('idle');
@@ -95,9 +148,9 @@ export function useCreateMatch() {
 }
 
 // ─── useJoinMatch ───────────────────────────────────────
-// Player 2 calls joinMatch on the contract
 export function useJoinMatch() {
   const { writeContractAsync } = useWriteContract();
+  const { address } = useAccount();
   const [txHash, setTxHash] = useState<Hex | undefined>();
   const [status, setStatus] = useState<MatchStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -112,16 +165,33 @@ export function useJoinMatch() {
     if (isError) { setStatus('error'); setError('Transaction failed on-chain'); }
   }, [isSuccess, isError]);
 
-  const joinMatch = useCallback(async (matchId: string, stakeEth: number) => {
+  const joinMatch = useCallback(async (matchId: string, stakeEth: number, authToken?: string) => {
+    if (!address) { setError('Wallet not connected'); return; }
     setStatus('pending');
     setError(null);
+
     try {
+      const stakeWei = parseEther(stakeEth.toString());
+
+      let permitArgs: { deadline: bigint; signature: Hex } | null = null;
+      if (authToken) {
+        try {
+          permitArgs = await fetchMatchPermit(matchId, address, stakeWei, authToken);
+        } catch (err: any) {
+          console.warn('[ESCROW] Permit fetch failed, proceeding without:', err.message);
+        }
+      }
+
       const hash = await writeContractAsync({
         address: CONTRACT_ADDRESS,
         abi: ESCROW_ABI,
         functionName: 'joinMatch',
-        args: [matchIdToBytes32(matchId)],
-        value: parseEther(stakeEth.toString()),
+        args: [
+          matchIdToBytes32(matchId),
+          permitArgs?.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 300),
+          permitArgs?.signature ?? '0x' as Hex,
+        ],
+        value: stakeWei,
         chainId: ACTIVE_CHAIN.id,
       });
       setTxHash(hash);
@@ -132,7 +202,7 @@ export function useJoinMatch() {
       setError(msg.includes('User rejected') ? 'Transaction rejected' : msg);
       return undefined;
     }
-  }, [writeContractAsync]);
+  }, [writeContractAsync, address]);
 
   const reset = useCallback(() => {
     setStatus('idle');
@@ -144,7 +214,6 @@ export function useJoinMatch() {
 }
 
 // ─── useBuyPerk ─────────────────────────────────────────
-// Purchase a perk/board via the contract
 export function useBuyPerk() {
   const { writeContractAsync } = useWriteContract();
   const [txHash, setTxHash] = useState<Hex | undefined>();
@@ -193,7 +262,6 @@ export function useBuyPerk() {
 }
 
 // ─── useMatchStatus ─────────────────────────────────────
-// Listens for contract events and dispatches updates
 export function useMatchStatus(matchId?: string) {
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [isReady, setIsReady] = useState(false);
@@ -201,7 +269,6 @@ export function useMatchStatus(matchId?: string) {
 
   const matchIdBytes = matchId ? matchIdToBytes32(matchId) : undefined;
 
-  // Listen for MatchReady (both players staked → game can start)
   useWatchContractEvent({
     address: CONTRACT_ADDRESS,
     abi: ESCROW_ABI,
@@ -222,7 +289,6 @@ export function useMatchStatus(matchId?: string) {
     enabled: !!matchIdBytes && isContractDeployed,
   });
 
-  // Listen for MatchSettled (game over → winner paid)
   useWatchContractEvent({
     address: CONTRACT_ADDRESS,
     abi: ESCROW_ABI,
@@ -247,7 +313,6 @@ export function useMatchStatus(matchId?: string) {
 }
 
 // ─── useClaimWinnings ───────────────────────────────────
-// Winner calls claimWinnings() on the contract to pull ETH
 export function useClaimWinnings() {
   const { writeContractAsync } = useWriteContract();
   const [txHash, setTxHash] = useState<Hex | undefined>();
@@ -294,7 +359,7 @@ export function useClaimWinnings() {
 }
 
 // ─── usePlayerClaimInfo ─────────────────────────────────
-// Read player's claimable balance from the contract
+// Now returns 5 values (added unlockTimestamp for grace period)
 export function usePlayerClaimInfo(playerAddress?: `0x${string}`) {
   const { data, refetch } = useReadContract({
     address: CONTRACT_ADDRESS,
@@ -303,14 +368,20 @@ export function usePlayerClaimInfo(playerAddress?: `0x${string}`) {
     args: playerAddress ? [playerAddress] : undefined,
     query: {
       enabled: !!playerAddress && isContractDeployed,
-      refetchInterval: 15000, // poll every 15s
+      refetchInterval: 15000,
     },
   });
 
-  const [claimable, totalWon, totalClaimed, matchesPlayed] = (data as [bigint, bigint, bigint, bigint]) || [BigInt(0), BigInt(0), BigInt(0), BigInt(0)];
+  const [claimable, unlockTimestamp, totalWon, totalClaimed, matchesPlayed] =
+    (data as [bigint, bigint, bigint, bigint, bigint]) || [BigInt(0), BigInt(0), BigInt(0), BigInt(0), BigInt(0)];
+
+  const unlockTime = Number(unlockTimestamp) * 1000; // Convert to JS ms
+  const isLocked = unlockTime > Date.now();
 
   return {
     claimable: Number(claimable) / 1e18,
+    unlockTime,
+    isLocked,
     totalWon: Number(totalWon) / 1e18,
     totalClaimed: Number(totalClaimed) / 1e18,
     matchesPlayed: Number(matchesPlayed),
@@ -319,7 +390,6 @@ export function usePlayerClaimInfo(playerAddress?: `0x${string}`) {
 }
 
 // ─── useContractStats ───────────────────────────────────
-// Read contract state for dashboard/admin
 export function useContractStats() {
   const { data: totalMatches } = useReadContract({
     address: CONTRACT_ADDRESS,

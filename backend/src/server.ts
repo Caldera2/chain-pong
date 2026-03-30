@@ -17,6 +17,7 @@ import playerRoutes from './routes/player.routes';
 import matchRoutes from './routes/match.routes';
 import leaderboardRoutes from './routes/leaderboard.routes';
 import boardsRoutes from './routes/boards.routes';
+import syncRoutes from './routes/sync.routes';
 
 // ─────────────────────────────────────────────────────────
 // Express App
@@ -104,6 +105,7 @@ app.use('/api/player', playerRoutes);
 app.use('/api/matches', matchRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/boards', boardsRoutes);
+app.use('/api/sync-match', syncRoutes);
 
 // ─── 404 ─────────────────────────────────────────────
 app.use((_req, res) => {
