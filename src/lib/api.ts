@@ -136,7 +136,8 @@ function getTokenExpiry(token: string): number | null {
 
 export async function ensureValidToken(): Promise<boolean> {
   if (!accessToken) loadTokens();
-  if (!accessToken) return false;
+  // No token = local/fallback auth mode (no backend) — allow through
+  if (!accessToken) return true;
 
   const exp = getTokenExpiry(accessToken);
   if (!exp) return !!accessToken; // Can't decode — let server reject if invalid
