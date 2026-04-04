@@ -44,6 +44,8 @@ export function getAccessToken(): string | null {
 
 // ─── HTTP Client ────────────────────────────────────────
 
+const REQUEST_TIMEOUT_MS = 8000; // 8s timeout to prevent infinite loading
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -60,20 +62,30 @@ async function request<T>(
   }
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
     let res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
 
     // If 401, try refreshing token
     if (res.status === 401 && refreshToken) {
       const refreshed = await tryRefresh();
       if (refreshed) {
         headers['Authorization'] = `Bearer ${accessToken}`;
+        const controller2 = new AbortController();
+        const timeout2 = setTimeout(() => controller2.abort(), REQUEST_TIMEOUT_MS);
         res = await fetch(`${API_BASE}${endpoint}`, {
           ...options,
           headers,
+          signal: controller2.signal,
         });
+        clearTimeout(timeout2);
       }
     }
 
@@ -81,17 +93,22 @@ async function request<T>(
     return json;
   } catch (err: any) {
     console.error(`API Error [${endpoint}]:`, err);
-    return { success: false, error: err.message || 'Network error' };
+    const message = err.name === 'AbortError' ? 'Request timed out' : (err.message || 'Network error');
+    return { success: false, error: message };
   }
 }
 
 async function tryRefresh(): Promise<boolean> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     const res = await fetch(`${API_BASE}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     const json = await res.json();
     if (json.success && json.data) {
       saveTokens(json.data.accessToken, json.data.refreshToken);
