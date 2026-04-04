@@ -970,6 +970,25 @@ export const ESCROW_ABI = [
         "type": "bytes32"
       }
     ],
+    "name": "matchIdUsed",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
     "name": "matches",
     "outputs": [
       {

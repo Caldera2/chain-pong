@@ -67,6 +67,7 @@ export interface ServerToClientEvents {
   'notification': (data: { type: string; message: string }) => void;
   'error': (data: { message: string }) => void;
   'auth_error': (data: { message: string }) => void;
+  'security_alert': (data: { message: string; matchId?: string }) => void;
 
   // Deposits (pushed via Alchemy webhook)
   'deposit_confirmed': (data: { amount: string; txHash: string; newBalance: string | null }) => void;

@@ -133,13 +133,38 @@ export function initializeSocket(httpServer: HttpServer): Server {
       socket.emit('match:cancelled', { reason: 'You cancelled matchmaking' });
     });
 
-    // ─── In-Game Events ────────────────────────────
+    // ─── Socket-Session Binding Helper ──────────────
+    // Validates that the socket sending a game event is one
+    // of the two registered players for that match. Prevents
+    // a third-party socket (using a stolen/shared JWT) from
+    // sniffing paddle positions or injecting spoofed moves.
+
+    function validateMatchSocket(matchId: string, socketId: string): { game: { p1: string; p2: string } } | null {
+      const game = activeGames.get(matchId);
+      if (!game) return null;
+
+      if (game.p1 !== socketId && game.p2 !== socketId) {
+        // Third-party socket attempting to interact with this match
+        console.warn(`[SECURITY] Socket ${socketId} (user ${user.userId}) attempted to send event for match ${matchId} — not a registered participant`);
+        socket.emit('security_alert', {
+          message: 'You are not a registered participant in this match session',
+          matchId,
+        });
+        socket.disconnect(true);
+        return null;
+      }
+
+      return { game };
+    }
+
+    // ─── In-Game Events (with session pinning) ────
 
     socket.on('game:ready', (data) => {
-      const game = activeGames.get(data.matchId);
-      if (!game) return;
+      const result = validateMatchSocket(data.matchId, socket.id);
+      if (!result) return;
 
       // Notify both players when both are ready
+      const { game } = result;
       socket.to(game.p1 === socket.id ? game.p2 : game.p1).emit('game:start', {
         matchId: data.matchId,
         countdown: 3,
@@ -147,10 +172,11 @@ export function initializeSocket(httpServer: HttpServer): Server {
     });
 
     socket.on('game:paddle', (data) => {
-      const game = activeGames.get(data.matchId);
-      if (!game) return;
+      const result = validateMatchSocket(data.matchId, socket.id);
+      if (!result) return;
 
       // Relay paddle position to opponent
+      const { game } = result;
       const opponentSocketId = game.p1 === socket.id ? game.p2 : game.p1;
       io.to(opponentSocketId).emit('game:state', {
         ballX: 0, ballY: 0, ballVX: 0, ballVY: 0, // ball state managed server-side in production
@@ -163,9 +189,10 @@ export function initializeSocket(httpServer: HttpServer): Server {
     });
 
     socket.on('game:perk', (data) => {
-      const game = activeGames.get(data.matchId);
-      if (!game) return;
+      const result = validateMatchSocket(data.matchId, socket.id);
+      if (!result) return;
 
+      const { game } = result;
       const opponentSocketId = game.p1 === socket.id ? game.p2 : game.p1;
       io.to(opponentSocketId).emit('game:perk', {
         playerId: user.userId,

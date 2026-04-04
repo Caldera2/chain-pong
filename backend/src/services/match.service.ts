@@ -68,6 +68,16 @@ export function generateConfigHash(seed: string): string {
   return hmac.digest('hex');
 }
 
+// ─── CSPRNG Match ID (on-chain) ─────────────────────────
+// Generates a cryptographically random bytes32 match ID for
+// the smart contract. Uses crypto.randomBytes(32) — impossible
+// to predict or collide. The DB match uses Prisma's cuid for
+// its primary key, but the ON-CHAIN matchId is this CSPRNG value.
+
+export function generateOnChainMatchId(): string {
+  return '0x' + crypto.randomBytes(32).toString('hex');
+}
+
 // ─── Server-Seeded Deterministic Ball Spawn ─────────────
 // Generates a crypto-random seed and derives the initial
 // ball trajectory from it. Both server and client use the

@@ -98,6 +98,26 @@ export function isRefereeActive(): boolean {
 
 // ─── EIP-712 Signing ────────────────────────────────────
 
+const DEADLINE_SECONDS = 900; // 15 minutes
+
+/**
+ * Fetch the current block.timestamp from the RPC provider.
+ * Uses on-chain time instead of Date.now() to prevent clock-drift
+ * rejections on L2s (Base Sequencer time can lag or leap).
+ * Falls back to Date.now()/1000 if the RPC call fails.
+ */
+async function getBlockTimestamp(): Promise<number> {
+  try {
+    const block = await provider.getBlock('latest');
+    if (block && block.timestamp) {
+      return block.timestamp;
+    }
+  } catch (err: any) {
+    console.warn('[REFEREE] Failed to fetch block timestamp, falling back to Date.now():', err.message);
+  }
+  return Math.floor(Date.now() / 1000);
+}
+
 /**
  * Sign a match permit for a player. The frontend presents this to the
  * contract's createMatch/joinMatch. Only pre-approved players can stake.
@@ -109,8 +129,9 @@ export async function signMatchPermit(
 ): Promise<{ signature: string; deadline: number }> {
   if (!isInitialized) throw new Error('Referee not initialized');
 
-  // 15-minute deadline — gives users time for MetaMask popup, slow gas, etc.
-  const deadline = Math.floor(Date.now() / 1000) + 900; // 15 minutes
+  // Use on-chain block.timestamp to avoid L2 clock-drift rejections
+  const blockTime = await getBlockTimestamp();
+  const deadline = blockTime + DEADLINE_SECONDS;
   const bytes32Id = matchIdToBytes32(matchId);
 
   const signature = await adminSigner.signTypedData(
@@ -137,8 +158,9 @@ async function signSettleProof(
   player1Score: number,
   player2Score: number
 ): Promise<{ signature: string; deadline: number }> {
-  // 15-minute deadline — consistent with permit, accounts for chain congestion
-  const deadline = Math.floor(Date.now() / 1000) + 900; // 15 minutes
+  // Use on-chain block.timestamp to avoid L2 clock-drift rejections
+  const blockTime = await getBlockTimestamp();
+  const deadline = blockTime + DEADLINE_SECONDS;
   const bytes32Id = matchIdToBytes32(matchId);
 
   const signature = await adminSigner.signTypedData(
@@ -253,7 +275,15 @@ export function watchMatchSettled(
 
 // ─── Core: Settle Match On-Chain ────────────────────────
 
+/**
+ * Convert a match ID to bytes32 for on-chain use.
+ * If the ID is already a 0x-prefixed 66-char hex (CSPRNG), use it directly.
+ * Otherwise, hash it via keccak256 for backwards compatibility with DB cuid IDs.
+ */
 function matchIdToBytes32(matchId: string): string {
+  if (matchId.startsWith('0x') && matchId.length === 66) {
+    return matchId; // Already a valid bytes32 from CSPRNG
+  }
   return ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['string'], [matchId]));
 }
 
