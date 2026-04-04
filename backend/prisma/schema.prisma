@@ -197,6 +197,9 @@ model Match {
   endedAt       DateTime?   @map("ended_at")
   createdAt     DateTime    @default(now()) @map("created_at")
 
+  // Anti-cheat: server-generated seed for deterministic ball physics
+  matchSeed     String?     @map("match_seed") // hex string, generated on match start
+
   // On-chain
   stakeTxHash   String?     @map("stake_tx_hash")
   payoutTxHash  String?     @map("payout_tx_hash")

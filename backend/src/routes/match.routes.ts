@@ -107,7 +107,9 @@ router.post('/:id/result', requireAuth, validateMatchResultRequest, async (req: 
       body.player1Score,
       body.player2Score,
       req.user!.userId,
-      body.perkUsed
+      body.perkUsed,
+      req.body.tickLog,
+      req.body.tickHash
     );
 
     // result includes { ...matchData, payoutToken }

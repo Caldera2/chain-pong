@@ -3,11 +3,14 @@ import { Server, Socket } from 'socket.io';
 import { verifyAccessToken } from '../utils/jwt';
 import { matchmakingQueue } from './matchmaking.service';
 import * as matchService from './match.service';
+import { generateMatchSeed } from './match.service';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { ClientToServerEvents, ServerToClientEvents, JwtPayload, QueueEntry } from '../types';
 
 type AuthSocket = Socket<ClientToServerEvents, ServerToClientEvents> & { user?: JwtPayload };
+
+const WIN_SCORE = 7;
 
 let io: Server<ClientToServerEvents, ServerToClientEvents>;
 
@@ -16,16 +19,35 @@ const onlineUsers = new Map<string, string>();
 // matchId → { player1SocketId, player2SocketId }
 const activeGames = new Map<string, { p1: string; p2: string }>();
 
+// ── Reconnection tracking for rage-quit detection ────
+// matchId → { disconnectedPlayer, timer, remainingPlayer }
+const reconnectionTimers = new Map<string, {
+  disconnectedUserId: string;
+  remainingSocketId: string;
+  matchId: string;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+const RECONNECT_WINDOW_MS = 15_000; // 15 seconds to reconnect
+
 export function initializeSocket(httpServer: HttpServer): Server {
   io = new Server(httpServer, {
     cors: {
-      origin: env.CORS_ORIGIN.split(','),
+      origin: env.CORS_ORIGIN.split(',').map(o => o.trim()),
       methods: ['GET', 'POST'],
       credentials: true,
     },
-    pingInterval: 10000,
-    pingTimeout: 5000,
+    // Heartbeat: ping every 10s, drop if no pong within 5s
+    pingInterval: 10_000,
+    pingTimeout: 5_000,
     transports: ['websocket', 'polling'],
+    // Allow upgrade from polling to websocket
+    allowUpgrades: true,
+    // Connection state recovery (Socket.IO v4.6+)
+    connectionStateRecovery: {
+      maxDisconnectionDuration: RECONNECT_WINDOW_MS,
+      skipMiddlewares: false,
+    },
   });
 
   // ─── Auth Middleware ────────────────────────────────
@@ -133,26 +155,107 @@ export function initializeSocket(httpServer: HttpServer): Server {
       });
     });
 
-    // ─── Disconnect ────────────────────────────────
+    // ─── Disconnect (with rage-quit protection) ───
 
     socket.on('disconnect', () => {
       console.log(`🔌 ${user.username} disconnected`);
       onlineUsers.delete(user.userId);
       matchmakingQueue.leave(user.userId);
 
-      // Handle mid-game disconnection
+      // Check if this player was in an active game
       for (const [matchId, game] of activeGames) {
         if (game.p1 === socket.id || game.p2 === socket.id) {
-          const opponentSocketId = game.p1 === socket.id ? game.p2 : game.p1;
-          io.to(opponentSocketId).emit('notification', {
+          const isP1 = game.p1 === socket.id;
+          const remainingSocketId = isP1 ? game.p2 : game.p1;
+
+          // Notify remaining player that opponent dropped
+          io.to(remainingSocketId).emit('notification', {
             type: 'disconnect',
-            message: 'Opponent disconnected. You win!',
+            message: `Opponent disconnected. Waiting 15s for reconnect...`,
           });
-          activeGames.delete(matchId);
+
+          // Start 15-second reconnection timer
+          const timer = setTimeout(async () => {
+            reconnectionTimers.delete(matchId);
+            activeGames.delete(matchId);
+
+            // Auto-forfeit: award 7-0 to remaining player
+            try {
+              console.log(`[FORFEIT] Player ${user.userId} failed to reconnect for match ${matchId}`);
+              const match = await prisma.match.findUnique({ where: { id: matchId } });
+              if (!match || match.status === 'COMPLETED' || match.status === 'CANCELLED') return;
+
+              // Remaining player wins by forfeit
+              const winnerId = isP1 ? match.player2Id : match.player1Id;
+              const p1Score = isP1 ? 0 : WIN_SCORE;
+              const p2Score = isP1 ? WIN_SCORE : 0;
+
+              if (winnerId) {
+                await matchService.submitMatchResult(
+                  matchId, p1Score, p2Score, winnerId, false
+                );
+                console.log(`[FORFEIT] Match ${matchId} awarded to ${winnerId} (7-0 forfeit)`);
+              }
+
+              io.to(remainingSocketId).emit('notification', {
+                type: 'forfeit',
+                message: 'Opponent forfeited. You win!',
+              });
+              io.to(remainingSocketId).emit('game:end', {
+                winnerId: winnerId || '',
+                player1Score: p1Score,
+                player2Score: p2Score,
+                earnings: '0',
+              });
+            } catch (err) {
+              console.error(`[FORFEIT] Failed to settle forfeit for match ${matchId}:`, err);
+            }
+          }, RECONNECT_WINDOW_MS);
+
+          reconnectionTimers.set(matchId, {
+            disconnectedUserId: user.userId,
+            remainingSocketId,
+            matchId,
+            timer,
+          });
+
           break;
         }
       }
     });
+
+    // ─── Reconnection (cancel forfeit timer) ──────
+
+    // Check if this connecting user has a pending reconnection
+    for (const [matchId, pending] of reconnectionTimers) {
+      if (pending.disconnectedUserId === user.userId) {
+        clearTimeout(pending.timer);
+        reconnectionTimers.delete(matchId);
+
+        // Re-register in active games with new socket ID
+        const game = activeGames.get(matchId);
+        if (game) {
+          if (game.p1 === pending.remainingSocketId) {
+            game.p2 = socket.id;
+          } else {
+            game.p1 = socket.id;
+          }
+        }
+
+        // Notify both players game resumes
+        io.to(pending.remainingSocketId).emit('notification', {
+          type: 'reconnect',
+          message: 'Opponent reconnected. Game resumed!',
+        });
+        socket.emit('notification', {
+          type: 'reconnect',
+          message: 'Reconnected! Game resumed.',
+        });
+
+        console.log(`🔌 ${user.username} reconnected to match ${matchId}`);
+        break;
+      }
+    }
   });
 
   // ─── Matchmaking Sweep (every 2 seconds) ──────────
@@ -174,18 +277,22 @@ async function handleMatchFound(p1: QueueEntry, p2: QueueEntry) {
     const match = await matchService.createPvpMatch(p1.userId, p1.boardId, p1.stakeAmount);
     const joined = await matchService.joinPvpMatch(match.id, p2.userId, p2.boardId);
 
-    // Start match
+    // Generate server-seeded randomness for deterministic ball physics
+    const matchSeed = generateMatchSeed();
+
+    // Start match and store the seed
     await prisma.match.update({
       where: { id: match.id },
-      data: { status: 'IN_PROGRESS', startedAt: new Date() },
+      data: { status: 'IN_PROGRESS', startedAt: new Date(), matchSeed },
     });
 
     // Track active game
     activeGames.set(match.id, { p1: p1.socketId, p2: p2.socketId });
 
-    // Notify both players
+    // Notify both players — seed is sent so both clients derive identical ball spawns
     const matchData = {
       matchId: match.id,
+      matchSeed,
     };
 
     io.to(p1.socketId).emit('match:found', {

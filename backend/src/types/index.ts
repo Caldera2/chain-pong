@@ -53,7 +53,7 @@ export interface MatchDTO {
 // ─── Socket Events ───────────────────────────────────
 export interface ServerToClientEvents {
   // Matchmaking
-  'match:found': (data: { matchId: string; opponent: { username: string; avatar: string; rating: number } }) => void;
+  'match:found': (data: { matchId: string; matchSeed: string; opponent: { username: string; avatar: string; rating: number } }) => void;
   'match:cancelled': (data: { reason: string }) => void;
 
   // In-game sync
@@ -66,6 +66,9 @@ export interface ServerToClientEvents {
   // Notifications
   'notification': (data: { type: string; message: string }) => void;
   'error': (data: { message: string }) => void;
+
+  // Deposits (pushed via Alchemy webhook)
+  'deposit_confirmed': (data: { amount: string; txHash: string; newBalance: string | null }) => void;
 }
 
 export interface ClientToServerEvents {

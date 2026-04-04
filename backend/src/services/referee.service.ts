@@ -327,6 +327,24 @@ export async function resolveMatchOnChain(
     // Still proceed — but alert so admin can raise minStake if this keeps happening
   }
 
+  // ── Front-running protection: check refund window ───
+  // The contract allows requestRefund() after 30 minutes.
+  // If we're within 2 minutes of that window, a losing player
+  // can front-run our settleMatch tx with a refund tx (higher gas).
+  // Abort early to avoid wasting gas on a tx that will revert.
+  const SETTLE_TIMEOUT_SEC = 30 * 60;  // matches contract's SETTLE_TIMEOUT
+  const SAFETY_BUFFER_SEC = 2 * 60;    // 2-minute safety margin
+  const matchAgeSec = (Date.now() - matchStartedAt.getTime()) / 1000;
+
+  if (matchAgeSec > SETTLE_TIMEOUT_SEC - SAFETY_BUFFER_SEC) {
+    console.warn(`[REFEREE] Match ${matchId} is ${Math.round(matchAgeSec / 60)}min old — too close to refund window, aborting`);
+    await sendDiscordAlert(
+      `Match \`${matchId}\` expired (${Math.round(matchAgeSec / 60)}min) — aborting settlement to avoid front-running`,
+      'warn'
+    );
+    return { success: false, error: 'Match too close to refund window — settlement aborted to prevent front-running' };
+  }
+
   // ── Verify on-chain state ───────────────────────────
   const bytes32Id = matchIdToBytes32(matchId);
   try {

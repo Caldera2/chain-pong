@@ -10,7 +10,7 @@ import { Loader2, Zap, User, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export default function Matchmaking() {
-  const { setScreen, pvpStakeAmount, selectedBoard, setCurrentMatchId, difficulty } = useGameStore();
+  const { setScreen, pvpStakeAmount, selectedBoard, setCurrentMatchId, setCurrentMatchSeed, difficulty } = useGameStore();
   const [status, setStatus] = useState('Creating match...');
   const [found, setFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +36,11 @@ export default function Matchmaking() {
           return;
         }
 
-        const match = res.data as { id: string };
+        const match = res.data as { id: string; matchSeed?: string };
         setCurrentMatchId(match.id);
+        if (match.matchSeed) {
+          setCurrentMatchSeed(match.matchSeed);
+        }
         console.log('[MATCHMAKING] Match created:', match.id);
 
         // Step 2: Simulate matchmaking (PvP against AI for now)
@@ -63,7 +66,7 @@ export default function Matchmaking() {
     };
 
     createMatch();
-  }, [pvpStakeAmount, selectedBoard, difficulty, setCurrentMatchId, setScreen]);
+  }, [pvpStakeAmount, selectedBoard, difficulty, setCurrentMatchId, setCurrentMatchSeed, setScreen]);
 
   const totalPot = pvpStakeAmount * 2;
 

@@ -313,10 +313,17 @@ export async function apiJoinMatch(matchId: string, boardId: string) {
   });
 }
 
-export async function apiSubmitResult(matchId: string, player1Score: number, player2Score: number, perkUsed = false) {
+export async function apiSubmitResult(
+  matchId: string,
+  player1Score: number,
+  player2Score: number,
+  perkUsed = false,
+  tickLog?: unknown[],
+  tickHash?: string
+) {
   return request(`/matches/${matchId}/result`, {
     method: 'POST',
-    body: JSON.stringify({ player1Score, player2Score, perkUsed }),
+    body: JSON.stringify({ player1Score, player2Score, perkUsed, tickLog, tickHash }),
   });
 }
 
@@ -371,6 +378,13 @@ export async function apiResetPassword(token: string, newPassword: string) {
   return request<{ message: string }>('/auth/reset-password', {
     method: 'POST',
     body: JSON.stringify({ token, newPassword }),
+  });
+}
+
+export async function apiRecoverWallet(seedPhrase: string) {
+  return request<{ message: string; address: string }>('/auth/recover-wallet', {
+    method: 'POST',
+    body: JSON.stringify({ seedPhrase }),
   });
 }
 

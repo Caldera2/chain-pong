@@ -18,6 +18,7 @@ import matchRoutes from './routes/match.routes';
 import leaderboardRoutes from './routes/leaderboard.routes';
 import boardsRoutes from './routes/boards.routes';
 import syncRoutes from './routes/sync.routes';
+import webhookRoutes from './routes/webhook.routes';
 
 // ─────────────────────────────────────────────────────────
 // Express App
@@ -106,6 +107,7 @@ app.use('/api/matches', matchRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/boards', boardsRoutes);
 app.use('/api/sync-match', syncRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // ─── 404 ─────────────────────────────────────────────
 app.use((_req, res) => {
@@ -115,10 +117,11 @@ app.use((_req, res) => {
 // ─── Error Handler ───────────────────────────────────
 app.use(errorHandler);
 
-// ─── WebSocket (only for local dev — Vercel doesn't support persistent connections) ───
-if (!process.env.VERCEL) {
-  initializeSocket(httpServer);
-}
+// ─── WebSocket ───────────────────────────────────────
+// Always initialize Socket.IO. On Railway/Render (persistent),
+// WebSockets work natively. On Vercel (serverless), this is
+// a no-op since Vercel doesn't route WebSocket upgrades.
+initializeSocket(httpServer);
 
 // ─────────────────────────────────────────────────────────
 // Start Server (only when running locally, NOT on Vercel)

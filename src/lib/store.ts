@@ -123,8 +123,10 @@ interface GameStore {
   // Backend sync
   userId: string | null; // server-side user ID
   currentMatchId: string | null; // active match ID from backend
+  currentMatchSeed: string | null; // server-generated seed for deterministic ball physics
   setUserId: (id: string | null) => void;
   setCurrentMatchId: (id: string | null) => void;
+  setCurrentMatchSeed: (seed: string | null) => void;
   syncFromBackend: () => Promise<void>; // pull latest profile + leaderboard from API
   fetchLeaderboard: () => Promise<void>; // fetch global leaderboard from API
 }
@@ -1548,6 +1550,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       playerRank: 0,
       userId: null,
       currentMatchId: null,
+      currentMatchSeed: null,
     });
   },
 
@@ -1731,7 +1734,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   // Backend sync
   userId: null,
   currentMatchId: null,
+  currentMatchSeed: null,
   setUserId: (id) => set({ userId: id }),
+  setCurrentMatchSeed: (seed) => set({ currentMatchSeed: seed }),
   setCurrentMatchId: (id) => {
     set({ currentMatchId: id });
     // Persist active match for reconnection

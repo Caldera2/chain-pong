@@ -22,13 +22,30 @@ export function getProvider(): ethers.JsonRpcProvider {
 
 const ENCRYPTION_ALGO = 'aes-256-gcm';
 const IV_LENGTH = 16;
-const TAG_LENGTH = 16;
 const SALT_LENGTH = 32;
 const KEY_LENGTH = 32;
+const PBKDF2_ITERATIONS = 100_000;
+
+// Dedicated encryption key — separate from JWT_SECRET so that
+// compromising the JWT secret doesn't expose wallet keys.
+// Falls back to JWT_SECRET for backwards compatibility.
+//
+// IMPORTANT: Password is NOT mixed into encryption. If it were,
+// a password reset would permanently brick the wallet (the old
+// password needed to decrypt would be gone). Instead, we rely on
+// the server-side WALLET_ENCRYPTION_KEY + random salt. Users who
+// lose server access can recover via their 12-word seed phrase.
+function getEncryptionSecret(): string {
+  return process.env.WALLET_ENCRYPTION_KEY || env.JWT_SECRET;
+}
 
 function deriveEncryptionKey(salt: Buffer): Buffer {
-  return crypto.pbkdf2Sync(env.JWT_SECRET, salt, 100000, KEY_LENGTH, 'sha512');
+  return crypto.pbkdf2Sync(getEncryptionSecret(), salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha512');
 }
+
+// Format v2 adds a version prefix so we can migrate old keys gracefully
+// v1 (legacy): salt:iv:tag:ciphertext
+// v2 (new):    v2:salt:iv:tag:ciphertext
 
 export function encryptPrivateKey(privateKey: string): string {
   const salt = crypto.randomBytes(SALT_LENGTH);
@@ -40,8 +57,8 @@ export function encryptPrivateKey(privateKey: string): string {
   encrypted += cipher.final('hex');
   const tag = cipher.getAuthTag();
 
-  // Format: salt:iv:tag:ciphertext (all hex)
   return [
+    'v2',
     salt.toString('hex'),
     iv.toString('hex'),
     tag.toString('hex'),
@@ -51,12 +68,24 @@ export function encryptPrivateKey(privateKey: string): string {
 
 export function decryptPrivateKey(encryptedData: string): string {
   const parts = encryptedData.split(':');
-  if (parts.length !== 4) throw new Error('Invalid encrypted key format');
 
-  const salt = Buffer.from(parts[0], 'hex');
-  const iv = Buffer.from(parts[1], 'hex');
-  const tag = Buffer.from(parts[2], 'hex');
-  const ciphertext = parts[3];
+  let salt: Buffer, iv: Buffer, tag: Buffer, ciphertext: string;
+
+  if (parts[0] === 'v2' && parts.length === 5) {
+    // v2 format with dedicated encryption key
+    salt = Buffer.from(parts[1], 'hex');
+    iv = Buffer.from(parts[2], 'hex');
+    tag = Buffer.from(parts[3], 'hex');
+    ciphertext = parts[4];
+  } else if (parts.length === 4) {
+    // v1 legacy format — decrypt with old JWT_SECRET-based key
+    salt = Buffer.from(parts[0], 'hex');
+    iv = Buffer.from(parts[1], 'hex');
+    tag = Buffer.from(parts[2], 'hex');
+    ciphertext = parts[3];
+  } else {
+    throw new Error('Invalid encrypted key format');
+  }
 
   const key = deriveEncryptionKey(salt);
   const decipher = crypto.createDecipheriv(ENCRYPTION_ALGO, key, iv);
@@ -65,6 +94,17 @@ export function decryptPrivateKey(encryptedData: string): string {
   let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
+}
+
+// ─────────────────────────────────────────────────────────
+// Recover wallet from seed phrase — re-encrypts with current
+// server key. Used after password reset or key rotation.
+// ─────────────────────────────────────────────────────────
+
+export function recoverAndReEncrypt(mnemonic: string): { address: string; encryptedKey: string } {
+  const wallet = ethers.Wallet.fromPhrase(mnemonic.trim());
+  const encryptedKey = encryptPrivateKey(wallet.privateKey);
+  return { address: wallet.address, encryptedKey };
 }
 
 // ─────────────────────────────────────────────────────────

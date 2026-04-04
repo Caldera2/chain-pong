@@ -12,6 +12,7 @@
 
 import { Decimal } from '@prisma/client/runtime/library';
 import { ethers } from 'ethers';
+import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { BadRequestError, NotFoundError, InsufficientBalanceError, ForbiddenError } from '../utils/errors';
@@ -25,6 +26,212 @@ const WIN_SCORE = 7;
 const PROTOCOL_FEE_BPS = 250; // 2.5%
 const K_FACTOR = 32;
 const TREASURY_ADDRESS = env.TREASURY_ADDRESS;
+
+// ─── Game Physics Constants (must match PongGame.tsx) ────
+const CANVAS_W = 800;
+const CANVAS_H = 500;
+const PADDLE_H = 100;
+const BALL_MAX_SPEED = 12;            // px/frame — ball should never exceed this
+const PADDLE_MAX_SPEED_PER_FRAME = 30; // px between ticks (~15 frames at 30-frame interval)
+const TICK_INTERVAL_FRAMES = 30;       // client records a tick every 30 frames
+const MIN_GAME_DURATION_SEC = 15;      // a 7-point game can't end in <15s realistically
+const MAX_GAME_DURATION_SEC = 600;     // 10 minutes max
+const MIN_TICKS_PER_POINT = 3;        // at least ~1.5s of play per point scored
+
+// ─── Server-Seeded Deterministic Ball Spawn ─────────────
+// Generates a crypto-random seed and derives the initial
+// ball trajectory from it. Both server and client use the
+// same algorithm, so the server can verify the first tick.
+
+export function generateMatchSeed(): string {
+  return crypto.randomBytes(16).toString('hex'); // 32-char hex
+}
+
+/**
+ * Derives deterministic ball spawn velocities from a matchSeed.
+ * Uses HMAC-SHA256 to extract two deterministic values for VX/VY direction.
+ * Must match the frontend implementation exactly.
+ */
+export function deriveBallSpawn(seed: string, roundIndex: number = 0): { vx: number; vy: number } {
+  const hmac = crypto.createHmac('sha256', seed);
+  hmac.update(`ball-spawn-${roundIndex}`);
+  const hash = hmac.digest();
+
+  // Use first byte for VX direction, second byte for VY direction
+  const vxDir = (hash[0] & 1) === 0 ? -1 : 1;
+  const vyDir = (hash[1] & 1) === 0 ? -1 : 1;
+
+  return { vx: 5 * vxDir, vy: 3 * vyDir };
+}
+
+// ─── Tick Physics Validator (anti-cheat) ─────────────────
+// Iterates through the client tick log and mathematically
+// verifies that the game state transitions are physically
+// plausible. Catches fake/generated tick logs.
+
+interface TickValidationResult {
+  valid: boolean;
+  reason?: string;
+  warnings: string[];
+}
+
+function validateTickPhysics(
+  ticks: any[],
+  player1Score: number,
+  player2Score: number,
+  matchSeed?: string | null
+): TickValidationResult {
+  const warnings: string[] = [];
+
+  if (!ticks || ticks.length === 0) {
+    return { valid: false, reason: 'Empty tick log', warnings };
+  }
+
+  const totalPoints = player1Score + player2Score;
+
+  // ── Seed-based first trajectory validation ────────
+  // If the server generated a matchSeed, verify the first tick's
+  // ball velocity matches the seed-derived spawn direction.
+  if (matchSeed && ticks.length > 0) {
+    const expected = deriveBallSpawn(matchSeed, 0);
+    const firstTick = ticks[0];
+
+    if (typeof firstTick.bvx === 'number' && typeof firstTick.bvy === 'number') {
+      // Verify direction matches (sign must match)
+      const vxSignMatch = Math.sign(firstTick.bvx) === Math.sign(expected.vx);
+      const vySignMatch = Math.sign(firstTick.bvy) === Math.sign(expected.vy);
+
+      if (!vxSignMatch || !vySignMatch) {
+        return {
+          valid: false,
+          reason: `First ball trajectory does not match server seed. Expected vx=${expected.vx}, vy=${expected.vy}, got vx=${firstTick.bvx}, vy=${firstTick.bvy}`,
+          warnings,
+        };
+      }
+
+      // Also verify magnitude is correct (5 for vx, 3 for vy)
+      if (Math.abs(firstTick.bvx) !== 5 || Math.abs(firstTick.bvy) !== 3) {
+        warnings.push(`First tick ball speed anomaly: vx=${firstTick.bvx}, vy=${firstTick.bvy}`);
+      }
+    } else {
+      // First tick missing ball velocity — suspicious for seeded matches
+      warnings.push('First tick missing ball velocity fields (bvx/bvy)');
+    }
+  }
+
+  // 1. Minimum tick count — need enough ticks to represent a real game
+  const minTicks = totalPoints * MIN_TICKS_PER_POINT;
+  if (ticks.length < minTicks) {
+    return {
+      valid: false,
+      reason: `Too few ticks: ${ticks.length} for ${totalPoints} points (need >= ${minTicks})`,
+      warnings,
+    };
+  }
+
+  // 2. Duration check — game must take a realistic amount of time
+  const firstTick = ticks[0];
+  const lastTick = ticks[ticks.length - 1];
+  const durationMs = (lastTick?.t || 0) - (firstTick?.t || 0);
+  const durationSec = durationMs / 1000;
+
+  if (durationSec < MIN_GAME_DURATION_SEC) {
+    return {
+      valid: false,
+      reason: `Game too fast: ${durationSec.toFixed(1)}s for ${totalPoints} points`,
+      warnings,
+    };
+  }
+
+  if (durationSec > MAX_GAME_DURATION_SEC) {
+    warnings.push(`Unusually long game: ${durationSec.toFixed(0)}s`);
+  }
+
+  // 3. Validate tick-by-tick physics
+  let prevTick = ticks[0];
+  let scoreIncreases = 0;
+
+  for (let i = 1; i < ticks.length; i++) {
+    const tick = ticks[i];
+
+    // 3a. Paddle speed check — paddle can't teleport
+    if (typeof tick.py === 'number' && typeof prevTick.py === 'number') {
+      const paddleDelta = Math.abs(tick.py - prevTick.py);
+      // Between ticks (~30 frames), max paddle movement is generous
+      // but a teleport across the entire canvas is impossible
+      if (paddleDelta > PADDLE_MAX_SPEED_PER_FRAME * TICK_INTERVAL_FRAMES) {
+        warnings.push(`Paddle teleport at tick ${i}: moved ${paddleDelta.toFixed(0)}px`);
+      }
+    }
+
+    // 3b. Ball position bounds check
+    if (typeof tick.bx === 'number' && typeof tick.by === 'number') {
+      if (tick.bx < -BALL_MAX_SPEED || tick.bx > CANVAS_W + BALL_MAX_SPEED) {
+        warnings.push(`Ball X out of bounds at tick ${i}: ${tick.bx}`);
+      }
+      if (tick.by < -BALL_MAX_SPEED || tick.by > CANVAS_H + BALL_MAX_SPEED) {
+        warnings.push(`Ball Y out of bounds at tick ${i}: ${tick.by}`);
+      }
+    }
+
+    // 3c. Time must be monotonically increasing
+    if (typeof tick.t === 'number' && typeof prevTick.t === 'number') {
+      if (tick.t < prevTick.t) {
+        return {
+          valid: false,
+          reason: `Time went backwards at tick ${i}: ${tick.t} < ${prevTick.t}`,
+          warnings,
+        };
+      }
+    }
+
+    // 3d. Score progression — scores should only increase
+    if (typeof tick.s === 'string' && typeof prevTick.s === 'string') {
+      const [curP1, curP2] = tick.s.split('-').map(Number);
+      const [prevP1, prevP2] = prevTick.s.split('-').map(Number);
+      if (!isNaN(curP1) && !isNaN(prevP1)) {
+        if (curP1 < prevP1 || curP2 < prevP2) {
+          return {
+            valid: false,
+            reason: `Score decreased at tick ${i}: ${prevTick.s} -> ${tick.s}`,
+            warnings,
+          };
+        }
+        if (curP1 > prevP1 || curP2 > prevP2) {
+          scoreIncreases++;
+        }
+      }
+    }
+
+    prevTick = tick;
+  }
+
+  // 4. Final score in ticks should match submitted scores
+  if (typeof lastTick.s === 'string') {
+    const [tickP1, tickP2] = lastTick.s.split('-').map(Number);
+    if (!isNaN(tickP1) && !isNaN(tickP2)) {
+      if (tickP1 !== player1Score || tickP2 !== player2Score) {
+        warnings.push(`Final tick score ${lastTick.s} != submitted ${player1Score}-${player2Score}`);
+      }
+    }
+  }
+
+  // 5. Score increases should roughly match total points
+  if (scoreIncreases < totalPoints - 1) {
+    warnings.push(`Only ${scoreIncreases} score transitions for ${totalPoints} total points`);
+  }
+
+  // Fail if too many warnings (strong indicator of fabrication)
+  if (warnings.length >= 5) {
+    return {
+      valid: false,
+      reason: `Too many physics anomalies (${warnings.length}): ${warnings[0]}`,
+      warnings,
+    };
+  }
+
+  return { valid: true, warnings };
+}
 
 // ─────────────────────────────────────────────────────────
 // Send ETH from player's game wallet to treasury
@@ -193,6 +400,8 @@ export async function createComputerMatch(
 ) {
   await verifyBoardOwnership(userId, boardId);
 
+  const matchSeed = generateMatchSeed();
+
   const match = await prisma.match.create({
     data: {
       mode: 'COMPUTER',
@@ -203,6 +412,7 @@ export async function createComputerMatch(
       stakeAmount: 0,
       potAmount: 0,
       startedAt: new Date(),
+      matchSeed,
     },
   });
 
@@ -311,7 +521,9 @@ export async function submitMatchResult(
   player1Score: number,
   player2Score: number,
   submitterId: string,
-  perkUsed: boolean = false
+  perkUsed: boolean = false,
+  tickLog?: any[],
+  tickHash?: string
 ) {
   const match = await prisma.match.findUnique({
     where: { id: matchId },
@@ -332,6 +544,42 @@ export async function submitMatchResult(
   if (!scoreCheck.valid) {
     console.warn(`[MATCH] Invalid scores for match ${matchId}: ${scoreCheck.reason}`);
     throw new BadRequestError(`Invalid scores: ${scoreCheck.reason}`);
+  }
+
+  // ── Security: Validate game tick physics ────────────
+  // Runs mathematical validation on the tick log to catch
+  // fabricated game data from scripts/bots.
+  if (tickLog && Array.isArray(tickLog) && tickLog.length > 0) {
+    const physicsCheck = validateTickPhysics(tickLog, player1Score, player2Score, match.matchSeed);
+
+    if (physicsCheck.warnings.length > 0) {
+      console.warn(`[MATCH] Tick warnings for ${matchId}:`, physicsCheck.warnings);
+    }
+
+    if (!physicsCheck.valid && match.mode === 'PVP') {
+      console.error(`[MATCH] TAMPERED GAME STATE for PvP match ${matchId}: ${physicsCheck.reason}`);
+      await prisma.match.update({
+        where: { id: matchId },
+        data: { status: 'DISPUTED' },
+      });
+      throw new BadRequestError(`Tampered game state: ${physicsCheck.reason}`);
+    }
+
+    if (!physicsCheck.valid) {
+      console.warn(`[MATCH] Tick validation failed for ${matchId}: ${physicsCheck.reason}`);
+    }
+
+    if (tickHash) {
+      console.log(`[MATCH] Tick hash for ${matchId}: ${tickHash} (${tickLog.length} ticks)`);
+    }
+  } else if (match.mode === 'PVP') {
+    // PvP with no tick log = definite spoofing attempt
+    console.error(`[MATCH] No tick log for PvP match ${matchId} - rejecting`);
+    await prisma.match.update({
+      where: { id: matchId },
+      data: { status: 'DISPUTED' },
+    });
+    throw new BadRequestError('Tick log required for PvP matches');
   }
 
   // ── Security: Match duration check (PvP only) ─────

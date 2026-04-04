@@ -38,6 +38,9 @@ export const env = {
   MAX_SINGLE_PAYOUT: process.env.MAX_SINGLE_PAYOUT || '0.2',
   ALERT_WEBHOOK_URL: process.env.ALERT_WEBHOOK_URL || '',
 
+  // Alchemy Notify (deposit webhooks)
+  ALCHEMY_WEBHOOK_SIGNING_KEY: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY || '',
+
   // Derived
   isDev: process.env.NODE_ENV !== 'production',
   isProd: process.env.NODE_ENV === 'production',

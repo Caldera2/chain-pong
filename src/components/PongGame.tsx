@@ -6,6 +6,64 @@ import { useGameStore } from '@/lib/store';
 import { apiSubmitResult } from '@/lib/api';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
 
+/**
+ * Game Tick Hash — anti-cheat proof that the game was actually played.
+ *
+ * Every N frames, we record a compact "tick" of game state:
+ *   { frame, ballX, ballY, paddleY, score, timestamp }
+ *
+ * At game end, we hash the full tick log and send it alongside scores.
+ * The backend validates: tick count, duration spread, score progression,
+ * and collision plausibility.
+ */
+interface GameTick {
+  f: number;  // frame number
+  bx: number; // ball x (truncated)
+  by: number; // ball y (truncated)
+  py: number; // player paddle y (truncated)
+  s: string;  // score "p-o"
+  t: number;  // timestamp offset from start (ms)
+  bvx?: number; // ball velocity X (included in first tick for seed verification)
+  bvy?: number; // ball velocity Y (included in first tick for seed verification)
+}
+
+const TICK_INTERVAL = 30; // Record a tick every 30 frames (~0.5s at 60fps)
+
+/**
+ * Derives deterministic ball spawn velocities from a server-provided matchSeed.
+ * Uses the same HMAC-SHA256 algorithm as the backend (match.service.ts).
+ * Falls back to Math.random() if no seed is provided (PvE / legacy).
+ */
+async function deriveBallSpawnFromSeed(
+  seed: string,
+  roundIndex: number
+): Promise<{ vx: number; vy: number }> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(seed),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(`ball-spawn-${roundIndex}`));
+  const bytes = new Uint8Array(sig);
+  const vxDir = (bytes[0] & 1) === 0 ? -1 : 1;
+  const vyDir = (bytes[1] & 1) === 0 ? -1 : 1;
+  return { vx: 5 * vxDir, vy: 3 * vyDir };
+}
+
+function hashTickLog(ticks: GameTick[]): string {
+  // Simple hash: JSON stringify + basic checksum
+  // Backend will re-validate the tick structure, not the hash itself
+  const raw = JSON.stringify(ticks);
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  }
+  return `v1:${ticks.length}:${hash.toString(16)}`;
+}
+
 const CANVAS_W = 800;
 const CANVAS_H = 500;
 const PADDLE_W = 14;
@@ -39,6 +97,7 @@ const AI_PERKS = ['Speed Surge', 'Expand Paddle', 'Precision Mode', 'Counter Spi
 
 export default function PongGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const tickLogRef = useRef<GameTick[]>([]);
   const gameStateRef = useRef({
     perkActive: false,
     aiPerkActive: false,
@@ -49,7 +108,7 @@ export default function PongGame() {
     maxRally: 0,
     totalRallies: 0,
     matchStartTime: 0,
-    lastScoreUpdate: 0, // throttle score UI updates
+    lastScoreUpdate: 0,
   });
 
   // Use individual selectors to avoid re-renders from unrelated store changes (e.g. balance polling)
@@ -61,6 +120,7 @@ export default function PongGame() {
   const selectedBoard = useGameStore((s) => s.selectedBoard);
   const pvpStakeAmount = useGameStore((s) => s.pvpStakeAmount);
   const currentMatchId = useGameStore((s) => s.currentMatchId);
+  const currentMatchSeed = useGameStore((s) => s.currentMatchSeed);
   const syncFromBackend = useGameStore((s) => s.syncFromBackend);
   // Stable refs for store functions to avoid effect re-runs
   const addWinRef = useRef(addWin);
@@ -71,6 +131,8 @@ export default function PongGame() {
   currentMatchIdRef.current = currentMatchId;
   const syncFromBackendRef = useRef(syncFromBackend);
   syncFromBackendRef.current = syncFromBackend;
+  const currentMatchSeedRef = useRef(currentMatchSeed);
+  currentMatchSeedRef.current = currentMatchSeed;
   const perkUsedRef = useRef(false);
 
   const [playerScore, setPlayerScore] = useState(0);
@@ -122,6 +184,41 @@ export default function PongGame() {
     const ctx = canvas.getContext('2d')!;
     let running = true; // flag to stop loop on cleanup
 
+    // ── Pre-compute seed-derived ball spawns ────────────
+    // We pre-derive spawns for the first N rounds so the game loop
+    // doesn't need to await async crypto on each reset.
+    const MAX_PRECOMPUTED_ROUNDS = 30; // enough for any game (max 13 points)
+    const precomputedSpawns: { vx: number; vy: number }[] = [];
+    let spawnsReady = false;
+    let spawnRound = 0; // tracks which round's spawn to use next
+
+    const seed = currentMatchSeedRef.current;
+    const initSpawns = async () => {
+      if (seed) {
+        for (let i = 0; i < MAX_PRECOMPUTED_ROUNDS; i++) {
+          precomputedSpawns.push(await deriveBallSpawnFromSeed(seed, i));
+        }
+      } else {
+        // No seed (legacy/PvE fallback) — use random spawns
+        for (let i = 0; i < MAX_PRECOMPUTED_ROUNDS; i++) {
+          precomputedSpawns.push({
+            vx: 5 * (Math.random() > 0.5 ? 1 : -1),
+            vy: 3 * (Math.random() > 0.5 ? 1 : -1),
+          });
+        }
+      }
+      spawnsReady = true;
+    };
+
+    // Hoisted for cleanup access
+    let animId: number;
+    let handleMouse: (e: MouseEvent) => void;
+    let handleTouch: (e: TouchEvent) => void;
+
+    // Start the game loop only after spawns are ready
+    initSpawns().then(() => {
+      if (!running) return;
+
     // Polyfill roundRect for older browsers
     if (!ctx.roundRect) {
       (ctx as any).roundRect = function (x: number, y: number, w: number, h: number, r: number) {
@@ -143,8 +240,11 @@ export default function PongGame() {
     let opponentY = CANVAS_H / 2 - PADDLE_H / 2;
     let ballX = CANVAS_W / 2;
     let ballY = CANVAS_H / 2;
-    let ballVX = 5 * (Math.random() > 0.5 ? 1 : -1);
-    let ballVY = 3 * (Math.random() > 0.5 ? 1 : -1);
+    // Use seed-derived spawn for round 0
+    const initialSpawn = precomputedSpawns[0] || { vx: 5, vy: 3 };
+    spawnRound = 1; // next reset uses round 1
+    let ballVX = initialSpawn.vx;
+    let ballVY = initialSpawn.vy;
     let mouseY = CANVAS_H / 2;
     let pScore = 0;
     let oScore = 0;
@@ -170,12 +270,12 @@ export default function PongGame() {
     let aiPaddleBonus = 0; // extra paddle height
     let aiSpeedBonus = 0; // extra speed
 
-    const handleMouse = (e: MouseEvent) => {
+    handleMouse = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       mouseY = ((e.clientY - rect.top) / rect.height) * CANVAS_H;
     };
 
-    const handleTouch = (e: TouchEvent) => {
+    handleTouch = (e: TouchEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       mouseY = ((e.touches[0].clientY - rect.top) / rect.height) * CANVAS_H;
@@ -200,8 +300,14 @@ export default function PongGame() {
     const resetBall = () => {
       ballX = CANVAS_W / 2;
       ballY = CANVAS_H / 2;
-      ballVX = 5 * (Math.random() > 0.5 ? 1 : -1);
-      ballVY = 3 * (Math.random() > 0.5 ? 1 : -1);
+      // Use seed-derived spawn for this round, fallback to random
+      const spawn = precomputedSpawns[spawnRound] || {
+        vx: 5 * (Math.random() > 0.5 ? 1 : -1),
+        vy: 3 * (Math.random() > 0.5 ? 1 : -1),
+      };
+      ballVX = spawn.vx;
+      ballVY = spawn.vy;
+      spawnRound++;
       rallyCount = 0;
     };
 
@@ -259,10 +365,27 @@ export default function PongGame() {
       ctx.globalAlpha = 1;
     };
 
-    let animId: number;
     const loop = () => {
       if (!running) return;
       frameCount++;
+
+      // Record game tick for anti-cheat hash log
+      if (frameCount % TICK_INTERVAL === 0) {
+        const tick: GameTick = {
+          f: frameCount,
+          bx: Math.round(ballX),
+          by: Math.round(ballY),
+          py: Math.round(mouseY),
+          s: `${pScore}-${oScore}`,
+          t: Date.now() - gameStateRef.current.matchStartTime,
+        };
+        // Include ball velocity in the first tick for server seed verification
+        if (tickLogRef.current.length === 0) {
+          tick.bvx = ballVX;
+          tick.bvy = ballVY;
+        }
+        tickLogRef.current.push(tick);
+      }
 
       // ─── AI Perk System (infinite perks, scales with difficulty) ───
       if (aiPerkTimer <= 0 && rallyCount > 3) {
@@ -485,8 +608,9 @@ export default function PongGame() {
         if (matchId) {
           const finalP1 = pScore;
           const finalP2 = oScore;
-          // Fire-and-forget: don't block the game over screen
-          apiSubmitResult(matchId, finalP1, finalP2, perkUsedRef.current)
+          const ticks = tickLogRef.current;
+          const tickHash = hashTickLog(ticks);
+          apiSubmitResult(matchId, finalP1, finalP2, perkUsedRef.current, ticks, tickHash)
             .then((res) => {
               if (res.success) {
                 console.log('[GAME] Match result submitted to backend:', matchId);
@@ -583,11 +707,14 @@ export default function PongGame() {
     };
 
     animId = requestAnimationFrame(loop);
+
+    }); // end initSpawns().then()
+
     return () => {
       running = false;
-      cancelAnimationFrame(animId);
-      canvas.removeEventListener('mousemove', handleMouse);
-      canvas.removeEventListener('touchmove', handleTouch);
+      if (animId) cancelAnimationFrame(animId);
+      if (handleMouse) canvas.removeEventListener('mousemove', handleMouse);
+      if (handleTouch) canvas.removeEventListener('touchmove', handleTouch);
     };
   // Stable dependencies only — mutable state uses refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
