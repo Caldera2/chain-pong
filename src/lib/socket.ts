@@ -3,22 +3,31 @@
 // ─────────────────────────────────────────────────────────
 
 import { io, Socket } from 'socket.io-client';
-import { getAccessToken } from './api';
+import { getAccessToken, ensureValidToken } from './api';
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4000';
 
 let socket: Socket | null = null;
 
+// Callback for auth errors — frontend can hook into this
+let onAuthErrorCallback: (() => void) | null = null;
+
+export function setOnAuthError(callback: () => void) {
+  onAuthErrorCallback = callback;
+}
+
 export function getSocket(): Socket | null {
   return socket;
 }
 
-export function connectSocket(): Socket {
+export async function connectSocket(): Promise<Socket> {
   if (socket?.connected) return socket;
 
+  // Pre-flight: ensure token is fresh before connecting
+  const tokenValid = await ensureValidToken();
   const token = getAccessToken();
-  if (!token) {
-    throw new Error('No access token — must be logged in to connect');
+  if (!token || !tokenValid) {
+    throw new Error('No valid access token — must be logged in to connect');
   }
 
   socket = io(SOCKET_URL, {
@@ -37,8 +46,39 @@ export function connectSocket(): Socket {
     console.log('🔌 Socket disconnected:', reason);
   });
 
-  socket.on('connect_error', (err) => {
+  socket.on('connect_error', async (err) => {
     console.error('🔌 Socket connection error:', err.message);
+
+    // If auth error, try silent re-login
+    if (err.message.includes('expired') || err.message.includes('Invalid') || err.message.includes('Authentication')) {
+      console.log('[SOCKET] Auth error detected — attempting silent token refresh...');
+      const refreshed = await ensureValidToken();
+      if (refreshed) {
+        const newToken = getAccessToken();
+        if (socket && newToken) {
+          socket.auth = { token: newToken };
+          socket.connect(); // Reconnect with fresh token
+          return;
+        }
+      }
+      // Refresh failed — notify frontend to handle re-login
+      onAuthErrorCallback?.();
+    }
+  });
+
+  // Listen for server-emitted auth_error (explicit token rejection mid-session)
+  socket.on('auth_error' as any, async (data: { message: string }) => {
+    console.warn('[SOCKET] Server auth_error:', data.message);
+    const refreshed = await ensureValidToken();
+    if (refreshed) {
+      const newToken = getAccessToken();
+      if (socket && newToken) {
+        socket.auth = { token: newToken };
+        socket.disconnect().connect();
+        return;
+      }
+    }
+    onAuthErrorCallback?.();
   });
 
   return socket;
@@ -53,8 +93,8 @@ export function disconnectSocket() {
 
 // ─── Matchmaking ────────────────────────────────────────
 
-export function joinMatchmaking(stakeAmount: number, boardId: string) {
-  const s = connectSocket();
+export async function joinMatchmaking(stakeAmount: number, boardId: string) {
+  const s = await connectSocket();
   s.emit('matchmaking:join', { stakeAmount, boardId });
 }
 

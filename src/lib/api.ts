@@ -44,7 +44,23 @@ export function getAccessToken(): string | null {
 
 // ─── HTTP Client ────────────────────────────────────────
 
-const REQUEST_TIMEOUT_MS = 8000; // 8s timeout to prevent infinite loading
+// Dynamic timeouts: blockchain ops get 45s, match results 45s, auth/data 10s
+const TIMEOUT_FAST = 10_000;       // Auth, leaderboard, profile, boards
+const TIMEOUT_BLOCKCHAIN = 45_000; // Deposits, withdrawals, payouts, match results
+
+function getTimeoutForEndpoint(endpoint: string): number {
+  // Blockchain-heavy routes need longer timeouts to avoid state desync
+  const slowRoutes = [
+    '/player/sync-deposits',
+    '/player/claim-earnings',
+    '/player/withdraw',
+    '/player/full-balance',
+    '/matches/',              // match result submission, permit, claim-payout
+  ];
+  if (slowRoutes.some(r => endpoint.includes(r))) return TIMEOUT_BLOCKCHAIN;
+  if (endpoint.includes('/result') || endpoint.includes('/claim') || endpoint.includes('/permit')) return TIMEOUT_BLOCKCHAIN;
+  return TIMEOUT_FAST;
+}
 
 async function request<T>(
   endpoint: string,
@@ -61,9 +77,11 @@ async function request<T>(
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
+  const timeoutMs = getTimeoutForEndpoint(endpoint);
+
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     let res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
@@ -79,7 +97,7 @@ async function request<T>(
       if (refreshed) {
         headers['Authorization'] = `Bearer ${accessToken}`;
         const controller2 = new AbortController();
-        const timeout2 = setTimeout(() => controller2.abort(), REQUEST_TIMEOUT_MS);
+        const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
         res = await fetch(`${API_BASE}${endpoint}`, {
           ...options,
           headers,
@@ -93,15 +111,60 @@ async function request<T>(
     return json;
   } catch (err: any) {
     console.error(`API Error [${endpoint}]:`, err);
+    // Blockchain routes: show "processing" instead of "failed" to prevent user panic
+    if (err.name === 'AbortError' && timeoutMs === TIMEOUT_BLOCKCHAIN) {
+      return { success: false, error: 'Transaction is still processing. Please check back shortly.' };
+    }
     const message = err.name === 'AbortError' ? 'Request timed out' : (err.message || 'Network error');
     return { success: false, error: message };
   }
 }
 
+// ─── Token Preflight ────────────────────────────────────
+// Decodes JWT exp claim and refreshes if within 60s of expiry.
+// Call before any critical action (socket connect, matchmaking).
+
+function getTokenExpiry(token: string): number | null {
+  try {
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(atob(payload));
+    return decoded.exp || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function ensureValidToken(): Promise<boolean> {
+  if (!accessToken) loadTokens();
+  if (!accessToken) return false;
+
+  const exp = getTokenExpiry(accessToken);
+  if (!exp) return !!accessToken; // Can't decode — let server reject if invalid
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const BUFFER_SEC = 60; // Refresh if within 60s of expiry
+
+  if (exp - nowSec < BUFFER_SEC) {
+    console.log('[AUTH] Token expiring soon, refreshing...');
+    if (refreshToken) {
+      const ok = await tryRefresh();
+      if (ok) {
+        console.log('[AUTH] Token refreshed successfully');
+        return true;
+      }
+      console.warn('[AUTH] Token refresh failed');
+      return false;
+    }
+    return false;
+  }
+
+  return true;
+}
+
 async function tryRefresh(): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_FAST);
     const res = await fetch(`${API_BASE}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

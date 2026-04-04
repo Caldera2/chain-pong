@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
-import { apiCreateMatch } from '@/lib/api';
+import { apiCreateMatch, ensureValidToken } from '@/lib/api';
 import { TOKEN_SYMBOL } from '@/lib/wagmi';
 import { useEffect, useState, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -22,6 +22,14 @@ export default function Matchmaking() {
 
     const createMatch = async () => {
       try {
+        // Step 0: Pre-flight token check — refresh if within 60s of expiry
+        setStatus('Verifying session...');
+        const tokenValid = await ensureValidToken();
+        if (!tokenValid) {
+          setError('Session expired. Please log in again.');
+          return;
+        }
+
         // Step 1: Create match on backend
         setStatus('Creating match on server...');
         const res = await apiCreateMatch(

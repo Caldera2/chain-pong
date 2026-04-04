@@ -14,6 +14,9 @@ import { treasuryGuard } from './treasury.guard';
 
 // ─── Constants ───────────────────────────────────────────
 const PROTOCOL_FEE_BPS = 250; // 2.5% (250 basis points)
+const TX_STUCK_TIMEOUT_MS = 120_000; // 2 minutes before RBF
+const RBF_GAS_MULTIPLIER = 150n;     // 50% higher gas for replacement
+const MAX_RBF_ATTEMPTS = 2;          // Max replacement attempts
 
 // ─── Nonce Manager ───────────────────────────────────────
 // Ensures concurrent payouts don't collide on the same nonce.
@@ -175,7 +178,7 @@ export async function executeWinnerPayout(
     return { success: false, error: `Treasury balance insufficient: ${balanceEth} ETH` };
   }
 
-  // ── Step 7: Execute transaction with nonce lock ────
+  // ── Step 7: Execute transaction with nonce lock + RBF ──
   return withNonceLock(async () => {
     try {
       const nonce = await getNextNonce(treasury);
@@ -193,28 +196,27 @@ export async function executeWinnerPayout(
 
       console.log(`[PAYOUT] TX broadcast: ${tx.hash} (match: ${matchId})`);
 
-      // Wait for 1 confirmation (Base Sepolia ~2s blocks)
-      const receipt = await tx.wait(1);
+      // Wait for confirmation with RBF fallback if stuck
+      const receipt = await waitWithRBF(treasury, tx, winnerAddress, payoutWei, nonce, matchId);
 
       if (!receipt || receipt.status === 0) {
-        // Transaction reverted on-chain
-        console.error(`[PAYOUT] TX reverted on-chain: ${tx.hash}`);
-        _currentNonce = null; // Reset nonce on failure
-
-        return { success: false, error: `Transaction reverted: ${tx.hash}` };
+        console.error(`[PAYOUT] TX reverted on-chain: ${receipt?.hash || tx.hash}`);
+        _currentNonce = null;
+        return { success: false, error: `Transaction reverted: ${receipt?.hash || tx.hash}` };
       }
 
       // ── Step 8: Record to permanent log ──────────
-      await recordPayoutLog(matchId, winnerAddress, winnerPayout, protocolFee, tx.hash, receipt.blockNumber);
+      const confirmedHash = receipt.hash || tx.hash;
+      await recordPayoutLog(matchId, winnerAddress, winnerPayout, protocolFee, confirmedHash, receipt.blockNumber);
 
       // Track in circuit breaker
       treasuryGuard.recordPayout(winnerPayout);
 
-      console.log(`[PAYOUT] ✅ Confirmed: ${tx.hash} | Block: ${receipt.blockNumber} | Match: ${matchId} | Amount: ${winnerPayout} ETH`);
+      console.log(`[PAYOUT] ✅ Confirmed: ${confirmedHash} | Block: ${receipt.blockNumber} | Match: ${matchId} | Amount: ${winnerPayout} ETH`);
 
       return {
         success: true,
-        txHash: tx.hash,
+        txHash: confirmedHash,
         winnerPayout,
         protocolFee,
       };
@@ -224,7 +226,6 @@ export async function executeWinnerPayout(
       // Reset nonce cache on any failure
       _currentNonce = null;
 
-      // If it's a nonce error, the next attempt will re-fetch
       if (err.code === 'NONCE_EXPIRED' || err.message?.includes('nonce')) {
         console.warn('[PAYOUT] Nonce error detected — will re-fetch on next attempt');
       }
@@ -232,6 +233,83 @@ export async function executeWinnerPayout(
       return { success: false, error: err.message };
     }
   });
+}
+
+// ─── Replace-By-Fee (RBF) for Stuck Transactions ────────
+// If a tx isn't mined within 2 minutes, resubmit with 50%
+// higher gas on the same nonce. Idempotent — only the first
+// mined tx counts; the other is discarded by the network.
+
+async function waitWithRBF(
+  signer: ethers.Wallet,
+  originalTx: ethers.TransactionResponse,
+  to: string,
+  value: bigint,
+  nonce: number,
+  matchId: string
+): Promise<ethers.TransactionReceipt | null> {
+  let currentTx = originalTx;
+
+  for (let attempt = 0; attempt <= MAX_RBF_ATTEMPTS; attempt++) {
+    try {
+      // Race: wait for confirmation vs timeout
+      const receipt = await Promise.race([
+        currentTx.wait(1),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), TX_STUCK_TIMEOUT_MS)),
+      ]);
+
+      if (receipt) return receipt;
+
+      // Tx is stuck — attempt RBF
+      if (attempt < MAX_RBF_ATTEMPTS) {
+        console.warn(`[PAYOUT] TX ${currentTx.hash} stuck for ${TX_STUCK_TIMEOUT_MS / 1000}s — RBF attempt ${attempt + 1}`);
+
+        const feeData = await getProvider().getFeeData();
+        const bumpedGas = getBumpedGasParams(feeData);
+
+        const replacementTx = await signer.sendTransaction({
+          to,
+          value,
+          nonce,
+          gasLimit: 21000n,
+          ...bumpedGas,
+        });
+
+        console.log(`[PAYOUT] RBF TX broadcast: ${replacementTx.hash} (replacing ${currentTx.hash}, match: ${matchId})`);
+        currentTx = replacementTx;
+      }
+    } catch (err: any) {
+      // "replacement transaction underpriced" means original is still propagating — wait longer
+      if (err.message?.includes('replacement') || err.message?.includes('underpriced')) {
+        console.warn(`[PAYOUT] RBF underpriced — original tx still propagating, waiting...`);
+        try {
+          return await originalTx.wait(1);
+        } catch {
+          return null;
+        }
+      }
+      // If the original tx was already mined, wait will throw TRANSACTION_REPLACED
+      if (err.code === 'TRANSACTION_REPLACED' && err.receipt) {
+        console.log(`[PAYOUT] TX replaced — confirmed: ${err.receipt.hash}`);
+        return err.receipt;
+      }
+      throw err;
+    }
+  }
+
+  // Final attempt: just wait on whatever the latest tx is
+  return currentTx.wait(1);
+}
+
+function getBumpedGasParams(feeData: ethers.FeeData): Record<string, bigint> {
+  if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+    return {
+      maxFeePerGas: (feeData.maxFeePerGas * RBF_GAS_MULTIPLIER) / 100n,
+      maxPriorityFeePerGas: (feeData.maxPriorityFeePerGas * RBF_GAS_MULTIPLIER) / 100n,
+    };
+  }
+  const gasPrice = feeData.gasPrice || ethers.parseUnits('0.1', 'gwei');
+  return { gasPrice: (gasPrice * RBF_GAS_MULTIPLIER) / 100n };
 }
 
 // ─── Refund (for cancellations) ──────────────────────────

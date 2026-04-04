@@ -109,7 +109,8 @@ export async function signMatchPermit(
 ): Promise<{ signature: string; deadline: number }> {
   if (!isInitialized) throw new Error('Referee not initialized');
 
-  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+  // 15-minute deadline — gives users time for MetaMask popup, slow gas, etc.
+  const deadline = Math.floor(Date.now() / 1000) + 900; // 15 minutes
   const bytes32Id = matchIdToBytes32(matchId);
 
   const signature = await adminSigner.signTypedData(
@@ -136,7 +137,8 @@ async function signSettleProof(
   player1Score: number,
   player2Score: number
 ): Promise<{ signature: string; deadline: number }> {
-  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+  // 15-minute deadline — consistent with permit, accounts for chain congestion
+  const deadline = Math.floor(Date.now() / 1000) + 900; // 15 minutes
   const bytes32Id = matchIdToBytes32(matchId);
 
   const signature = await adminSigner.signTypedData(

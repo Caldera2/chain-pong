@@ -62,8 +62,26 @@ export function initializeSocket(httpServer: HttpServer): Server {
       socket.user = payload;
       next();
     } catch {
-      next(new Error('Invalid or expired token'));
+      // Emit auth_error so the frontend can silently refresh instead of showing a hard failure
+      next(new Error('auth_error: Token expired or invalid. Please reconnect.'));
     }
+  });
+
+  // ─── Mid-Session Token Validation ──────────────────
+  // Re-verify JWT on every inbound event. If expired, emit auth_error
+  // so the client can silently refresh and reconnect.
+  io.on('connection', (socket: AuthSocket) => {
+    socket.use((event, nextMw) => {
+      const token = socket.handshake.auth.token;
+      if (token) {
+        try {
+          verifyAccessToken(token as string);
+        } catch {
+          socket.emit('auth_error', { message: 'Token expired. Reconnect with a fresh token.' });
+        }
+      }
+      nextMw();
+    });
   });
 
   // ─── Connection Handler ────────────────────────────
