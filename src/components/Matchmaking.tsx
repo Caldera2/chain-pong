@@ -24,13 +24,9 @@ export default function Matchmaking() {
       try {
         // Step 0: Pre-flight token check — refresh if within 60s of expiry
         setStatus('Verifying session...');
-        const tokenValid = await ensureValidToken();
-        if (!tokenValid) {
-          setError('Session expired. Please log in again.');
-          return;
-        }
+        await ensureValidToken();
 
-        // Step 1: Create match on backend
+        // Step 1: Try to create match on backend
         setStatus('Creating match on server...');
         const res = await apiCreateMatch(
           'PVP',
@@ -39,19 +35,21 @@ export default function Matchmaking() {
           difficulty?.toUpperCase() as 'EASY' | 'MEDIUM' | 'HARD'
         );
 
-        if (!res.success || !res.data) {
-          setError(res.error || 'Failed to create match');
-          return;
+        if (res.success && res.data) {
+          const match = res.data as { id: string; matchSeed?: string };
+          setCurrentMatchId(match.id);
+          if (match.matchSeed) {
+            setCurrentMatchSeed(match.matchSeed);
+          }
+          console.log('[MATCHMAKING] Match created on server:', match.id);
+        } else {
+          // Backend unavailable — create local match (play vs AI)
+          const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          setCurrentMatchId(localId);
+          console.log('[MATCHMAKING] Backend unavailable, local match:', localId, '| Reason:', res.error);
         }
 
-        const match = res.data as { id: string; matchSeed?: string };
-        setCurrentMatchId(match.id);
-        if (match.matchSeed) {
-          setCurrentMatchSeed(match.matchSeed);
-        }
-        console.log('[MATCHMAKING] Match created:', match.id);
-
-        // Step 2: Simulate matchmaking (PvP against AI for now)
+        // Step 2: Simulate matchmaking
         setStatus('Searching for opponent...');
         await new Promise(r => setTimeout(r, 1500));
 
