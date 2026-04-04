@@ -55,8 +55,16 @@ export async function syncDeposits(userId: string): Promise<{
     const diffWei = onChainBalanceWei - expectedOnChainWei;
     depositAmount = ethers.formatEther(diffWei);
 
-    // Only create deposit if it's meaningful (> 0.00001 ETH to avoid dust)
-    if (diffWei > ethers.parseEther('0.00001')) {
+    // ── Dust Spam Protection ──────────────────────────────
+    // Ignore deposits below our minimum stake tier (0.001 ETH).
+    // Attackers can spam thousands of 1-wei transactions to bloat
+    // the Transaction table and slow down balance/ELO queries.
+    const MIN_DEPOSIT_WEI = ethers.parseEther('0.001'); // matches lowest stake tier
+    if (diffWei < MIN_DEPOSIT_WEI) {
+      console.log(`[DEPOSIT] Ignored dust transaction: ${depositAmount} ETH for user ${userId} (below 0.001 ETH minimum)`);
+      return { newDeposit: false, depositAmount: '0', onChainBalance, gameBalance: '0' };
+    }
+    if (diffWei > 0n) {
       // Check we haven't already recorded this deposit (idempotency)
       const recentDeposit = await prisma.transaction.findFirst({
         where: {

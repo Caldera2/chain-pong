@@ -10,7 +10,7 @@ import { Loader2, Zap, User, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export default function Matchmaking() {
-  const { setScreen, pvpStakeAmount, selectedBoard, setCurrentMatchId, setCurrentMatchSeed, difficulty } = useGameStore();
+  const { setScreen, pvpStakeAmount, selectedBoard, setCurrentMatchId, setCurrentMatchSeed, setCurrentConfigHash, difficulty } = useGameStore();
   const [status, setStatus] = useState('Creating match...');
   const [found, setFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,11 +36,10 @@ export default function Matchmaking() {
         );
 
         if (res.success && res.data) {
-          const match = res.data as { id: string; matchSeed?: string };
+          const match = res.data as { id: string; matchSeed?: string; configHash?: string };
           setCurrentMatchId(match.id);
-          if (match.matchSeed) {
-            setCurrentMatchSeed(match.matchSeed);
-          }
+          if (match.matchSeed) setCurrentMatchSeed(match.matchSeed);
+          if (match.configHash) setCurrentConfigHash(match.configHash);
           console.log('[MATCHMAKING] Match created on server:', match.id);
         } else {
           // Backend unavailable — create local match (play vs AI)

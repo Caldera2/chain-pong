@@ -61,7 +61,14 @@ router.post('/alchemy-deposit', async (req: Request, res: Response) => {
       const txHash = activity.hash;
       const valueEth = parseFloat(activity.value);
 
-      if (valueEth < 0.00001) continue; // Skip dust
+      // ── Dust Spam Protection ────────────────────────
+      // Ignore transactions below minimum stake tier (0.001 ETH).
+      // Prevents attackers from bloating Transaction table with
+      // thousands of tiny transfers that slow down balance queries.
+      if (valueEth < 0.001) {
+        console.log(`[WEBHOOK] Ignored dust transaction: ${valueEth} ETH to ${toAddress} from ${fromAddress}`);
+        continue;
+      }
 
       // Find the user whose game wallet received this deposit
       const user = await prisma.user.findFirst({

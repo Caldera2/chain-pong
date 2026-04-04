@@ -3,7 +3,7 @@ import { Server, Socket } from 'socket.io';
 import { verifyAccessToken } from '../utils/jwt';
 import { matchmakingQueue } from './matchmaking.service';
 import * as matchService from './match.service';
-import { generateMatchSeed } from './match.service';
+import { generateMatchSeed, generateConfigHash } from './match.service';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { ClientToServerEvents, ServerToClientEvents, JwtPayload, QueueEntry } from '../types';
@@ -297,6 +297,7 @@ async function handleMatchFound(p1: QueueEntry, p2: QueueEntry) {
 
     // Generate server-seeded randomness for deterministic ball physics
     const matchSeed = generateMatchSeed();
+    const configHash = generateConfigHash(matchSeed);
 
     // Start match and store the seed
     await prisma.match.update({
@@ -307,10 +308,11 @@ async function handleMatchFound(p1: QueueEntry, p2: QueueEntry) {
     // Track active game
     activeGames.set(match.id, { p1: p1.socketId, p2: p2.socketId });
 
-    // Notify both players — seed is sent so both clients derive identical ball spawns
+    // Notify both players — seed + configHash sent so clients can verify constants
     const matchData = {
       matchId: match.id,
       matchSeed,
+      configHash,
     };
 
     io.to(p1.socketId).emit('match:found', {

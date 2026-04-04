@@ -124,9 +124,11 @@ interface GameStore {
   userId: string | null; // server-side user ID
   currentMatchId: string | null; // active match ID from backend
   currentMatchSeed: string | null; // server-generated seed for deterministic ball physics
+  currentConfigHash: string | null; // HMAC hash of official game constants
   setUserId: (id: string | null) => void;
   setCurrentMatchId: (id: string | null) => void;
   setCurrentMatchSeed: (seed: string | null) => void;
+  setCurrentConfigHash: (hash: string | null) => void;
   syncFromBackend: () => Promise<void>; // pull latest profile + leaderboard from API
   fetchLeaderboard: () => Promise<void>; // fetch global leaderboard from API
 }
@@ -1551,6 +1553,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       userId: null,
       currentMatchId: null,
       currentMatchSeed: null,
+      currentConfigHash: null,
     });
   },
 
@@ -1735,8 +1738,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   userId: null,
   currentMatchId: null,
   currentMatchSeed: null,
+  currentConfigHash: null,
   setUserId: (id) => set({ userId: id }),
   setCurrentMatchSeed: (seed) => set({ currentMatchSeed: seed }),
+  setCurrentConfigHash: (hash) => set({ currentConfigHash: hash }),
   setCurrentMatchId: (id) => {
     set({ currentMatchId: id });
     // Persist active match for reconnection

@@ -27,16 +27,46 @@ const PROTOCOL_FEE_BPS = 250; // 2.5%
 const K_FACTOR = 32;
 const TREASURY_ADDRESS = env.TREASURY_ADDRESS;
 
-// ─── Game Physics Constants (must match PongGame.tsx) ────
-const CANVAS_W = 800;
-const CANVAS_H = 500;
-const PADDLE_H = 100;
-const BALL_MAX_SPEED = 12;            // px/frame — ball should never exceed this
+// ─── Official Game Config (must match PongGame.tsx) ──────
+// These are the canonical physics constants. A HMAC-SHA256 hash
+// is sent with each match so the frontend can verify it hasn't
+// been tampered with. The backend validates against these values.
+
+export const OFFICIAL_GAME_CONFIG = {
+  CANVAS_W: 800,
+  CANVAS_H: 500,
+  PADDLE_W: 14,
+  PADDLE_H: 100,
+  BALL_RADIUS: 10,
+  BALL_SPEED_X: 5,
+  BALL_SPEED_Y: 3,
+  BALL_MAX_SPEED: 12,
+  WIN_SCORE: 7,
+  TICK_INTERVAL_FRAMES: 30,
+} as const;
+
+// Derived validation constants
+const CANVAS_W = OFFICIAL_GAME_CONFIG.CANVAS_W;
+const CANVAS_H = OFFICIAL_GAME_CONFIG.CANVAS_H;
+const PADDLE_H = OFFICIAL_GAME_CONFIG.PADDLE_H;
+const BALL_MAX_SPEED = OFFICIAL_GAME_CONFIG.BALL_MAX_SPEED;
 const PADDLE_MAX_SPEED_PER_FRAME = 30; // px between ticks (~15 frames at 30-frame interval)
-const TICK_INTERVAL_FRAMES = 30;       // client records a tick every 30 frames
+const TICK_INTERVAL_FRAMES = OFFICIAL_GAME_CONFIG.TICK_INTERVAL_FRAMES;
 const MIN_GAME_DURATION_SEC = 15;      // a 7-point game can't end in <15s realistically
 const MAX_GAME_DURATION_SEC = 600;     // 10 minutes max
 const MIN_TICKS_PER_POINT = 3;        // at least ~1.5s of play per point scored
+
+/**
+ * Generate a HMAC-SHA256 hash of the official game config.
+ * Sent to the frontend with each match so the client can verify
+ * its local constants haven't been modified via DevTools.
+ */
+export function generateConfigHash(seed: string): string {
+  const configStr = JSON.stringify(OFFICIAL_GAME_CONFIG);
+  const hmac = crypto.createHmac('sha256', seed);
+  hmac.update(configStr);
+  return hmac.digest('hex');
+}
 
 // ─── Server-Seeded Deterministic Ball Spawn ─────────────
 // Generates a crypto-random seed and derives the initial
@@ -401,6 +431,7 @@ export async function createComputerMatch(
   await verifyBoardOwnership(userId, boardId);
 
   const matchSeed = generateMatchSeed();
+  const configHash = generateConfigHash(matchSeed);
 
   const match = await prisma.match.create({
     data: {
@@ -416,7 +447,7 @@ export async function createComputerMatch(
     },
   });
 
-  return match;
+  return { ...match, configHash };
 }
 
 // ─────────────────────────────────────────────────────────

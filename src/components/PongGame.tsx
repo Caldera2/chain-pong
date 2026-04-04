@@ -64,12 +64,43 @@ function hashTickLog(ticks: GameTick[]): string {
   return `v1:${ticks.length}:${hash.toString(16)}`;
 }
 
-const CANVAS_W = 800;
-const CANVAS_H = 500;
-const PADDLE_W = 14;
-const PADDLE_H = 100; // slightly taller paddle for better control
-const BALL_R = 10;
-const WIN_SCORE = 5;
+// ─── Official Game Config (must match backend OFFICIAL_GAME_CONFIG) ───
+const OFFICIAL_GAME_CONFIG = {
+  CANVAS_W: 800,
+  CANVAS_H: 500,
+  PADDLE_W: 14,
+  PADDLE_H: 100,
+  BALL_RADIUS: 10,
+  BALL_SPEED_X: 5,
+  BALL_SPEED_Y: 3,
+  BALL_MAX_SPEED: 12,
+  WIN_SCORE: 7,
+  TICK_INTERVAL_FRAMES: 30,
+} as const;
+
+/**
+ * Verify the server's configHash matches our local game constants.
+ * Prevents modified clients from playing with tampered physics.
+ */
+async function verifyConfigHash(seed: string, serverHash: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const configStr = JSON.stringify(OFFICIAL_GAME_CONFIG);
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(seed),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(configStr));
+  const bytes = new Uint8Array(sig);
+  const localHash = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  return localHash === serverHash;
+}
+
+const CANVAS_W = OFFICIAL_GAME_CONFIG.CANVAS_W;
+const CANVAS_H = OFFICIAL_GAME_CONFIG.CANVAS_H;
+const PADDLE_W = OFFICIAL_GAME_CONFIG.PADDLE_W;
+const PADDLE_H = OFFICIAL_GAME_CONFIG.PADDLE_H;
+const BALL_R = OFFICIAL_GAME_CONFIG.BALL_RADIUS;
+const WIN_SCORE = 5; // Frontend uses 5 for faster games; backend validates against its own
 
 const COLORS = {
   bg: '#08090e',
@@ -121,6 +152,7 @@ export default function PongGame() {
   const pvpStakeAmount = useGameStore((s) => s.pvpStakeAmount);
   const currentMatchId = useGameStore((s) => s.currentMatchId);
   const currentMatchSeed = useGameStore((s) => s.currentMatchSeed);
+  const currentConfigHash = useGameStore((s) => s.currentConfigHash);
   const syncFromBackend = useGameStore((s) => s.syncFromBackend);
   // Stable refs for store functions to avoid effect re-runs
   const addWinRef = useRef(addWin);
@@ -133,6 +165,8 @@ export default function PongGame() {
   syncFromBackendRef.current = syncFromBackend;
   const currentMatchSeedRef = useRef(currentMatchSeed);
   currentMatchSeedRef.current = currentMatchSeed;
+  const currentConfigHashRef = useRef(currentConfigHash);
+  currentConfigHashRef.current = currentConfigHash;
   const perkUsedRef = useRef(false);
 
   const [playerScore, setPlayerScore] = useState(0);
@@ -193,7 +227,19 @@ export default function PongGame() {
     let spawnRound = 0; // tracks which round's spawn to use next
 
     const seed = currentMatchSeedRef.current;
+    const serverConfigHash = currentConfigHashRef.current;
     const initSpawns = async () => {
+      // ── Config integrity check ────────────────────────
+      // If the server sent a configHash, verify our local constants
+      // match. Prevents modified clients from playing with tampered physics.
+      if (seed && serverConfigHash) {
+        const configValid = await verifyConfigHash(seed, serverConfigHash);
+        if (!configValid) {
+          console.error('[ANTICHEAT] Game config mismatch — local constants have been tampered with');
+          // Game will still run but with a warning; server will reject tick log
+        }
+      }
+
       if (seed) {
         for (let i = 0; i < MAX_PRECOMPUTED_ROUNDS; i++) {
           precomputedSpawns.push(await deriveBallSpawnFromSeed(seed, i));

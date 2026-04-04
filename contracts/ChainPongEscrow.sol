@@ -103,6 +103,14 @@ contract ChainPongEscrow {
 
     bool private _locked;
 
+    // ── Dispute Circuit Breaker ─────────────────────────
+    // Prevents a compromised admin key from mass-clawing back
+    // all winners' pending balances in a single attack.
+    uint256 public disputesThisWindow;       // disputes in current 1-hour window
+    uint256 public disputeWindowStart;       // start of current window
+    uint256 public maxDisputesPerWindow;     // max disputes before lock (default 5)
+    bool    public disputeCircuitBroken;     // true = adminDisputeMatch locked
+
     // ══════════════════════════════════════════════════════
     // EVENTS
     // ══════════════════════════════════════════════════════
@@ -126,6 +134,8 @@ contract ChainPongEscrow {
     event ResolverUpdated(address indexed newResolver);
     event ProtocolFeeUpdated(uint256 newFeeBps);
     event GlobalPause(bool paused, address triggeredBy);
+    event DisputeCircuitBroken(uint256 disputeCount, uint256 window);
+    event DisputeCircuitReset(address resetBy);
 
     // ══════════════════════════════════════════════════════
     // MODIFIERS
@@ -168,6 +178,7 @@ contract ChainPongEscrow {
         minStake = 0.001 ether;
         maxStake = 0.05 ether;
         disputeTimeout = 24 hours;
+        maxDisputesPerWindow = 5; // max 5 disputes per hour before circuit breaks
 
         validStakes[0.001 ether] = true;
         validStakes[0.002 ether] = true;
@@ -532,12 +543,29 @@ contract ChainPongEscrow {
     /// @notice Revert a settled match during the 1-hour grace period. Claws back claimable balance
     ///         and moves the match to Disputed so the admin can refund or re-assign via resolveDispute().
     function adminDisputeMatch(bytes32 matchId) external onlyOwner {
+        require(!disputeCircuitBroken, "Dispute circuit breaker active");
+
         Match storage m = matches[matchId];
         require(m.state == MatchState.Settled, "Not settled");
         require(
             block.timestamp < m.settledAt + CLAIM_GRACE_PERIOD,
             "Grace period expired"
         );
+
+        // ── Dispute rate limiter ────────────────────────
+        // Reset window if 1 hour has passed
+        if (block.timestamp > disputeWindowStart + 1 hours) {
+            disputesThisWindow = 0;
+            disputeWindowStart = block.timestamp;
+        }
+        disputesThisWindow++;
+
+        // Trip circuit breaker if too many disputes in this window
+        if (disputesThisWindow > maxDisputesPerWindow) {
+            disputeCircuitBroken = true;
+            emit DisputeCircuitBroken(disputesThisWindow, disputeWindowStart);
+            revert("Dispute rate limit exceeded - circuit breaker tripped");
+        }
 
         address formerWinner = m.winner;
         uint256 pot = m.stakeAmount * 2;
@@ -674,6 +702,20 @@ contract ChainPongEscrow {
 
     function setDisputeTimeout(uint256 _timeout) external onlyOwner {
         disputeTimeout = _timeout;
+    }
+
+    /// @notice Reset the dispute circuit breaker after investigation.
+    function resetDisputeCircuitBreaker() external onlyOwner {
+        disputeCircuitBroken = false;
+        disputesThisWindow = 0;
+        disputeWindowStart = block.timestamp;
+        emit DisputeCircuitReset(msg.sender);
+    }
+
+    /// @notice Set the maximum number of disputes allowed per 1-hour window.
+    function setMaxDisputesPerWindow(uint256 _max) external onlyOwner {
+        require(_max > 0, "Must allow at least 1");
+        maxDisputesPerWindow = _max;
     }
 
     function transferOwnership(address newOwner) external onlyOwner {

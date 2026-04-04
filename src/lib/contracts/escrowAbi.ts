@@ -19,6 +19,38 @@ export const ESCROW_ABI = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "disputeCount",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "window",
+        "type": "uint256"
+      }
+    ],
+    "name": "DisputeCircuitBroken",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "resetBy",
+        "type": "address"
+      }
+    ],
+    "name": "DisputeCircuitReset",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": true,
         "internalType": "address",
         "name": "to",
@@ -592,6 +624,19 @@ export const ESCROW_ABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "disputeCircuitBroken",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "bytes32",
@@ -607,6 +652,32 @@ export const ESCROW_ABI = [
   {
     "inputs": [],
     "name": "disputeTimeout",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "disputeWindowStart",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "disputesThisWindow",
     "outputs": [
       {
         "internalType": "uint256",
@@ -952,6 +1023,19 @@ export const ESCROW_ABI = [
   },
   {
     "inputs": [],
+    "name": "maxDisputesPerWindow",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "maxStake",
     "outputs": [
       {
@@ -1152,6 +1236,13 @@ export const ESCROW_ABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "resetDisputeCircuitBreaker",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "bytes32",
@@ -1204,6 +1295,19 @@ export const ESCROW_ABI = [
       }
     ],
     "name": "setDisputeTimeout",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_max",
+        "type": "uint256"
+      }
+    ],
+    "name": "setMaxDisputesPerWindow",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
