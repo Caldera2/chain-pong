@@ -4,7 +4,7 @@ import { getDefaultConfig } from '@rainbow-me/rainbowkit';
 
 export const config = getDefaultConfig({
   appName: 'Chain Pong',
-  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID || 'chain-pong',
+  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID || '308d9a88df2c8699d6a2ea6a190a6bce',
   chains: [baseSepolia],
   transports: {
     [baseSepolia.id]: http('https://sepolia.base.org'),
