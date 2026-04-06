@@ -16,6 +16,7 @@ import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { env } from '../config/env';
 import { BadRequestError, NotFoundError, InsufficientBalanceError, ForbiddenError } from '../utils/errors';
+import { sendSecurityAlert } from '../utils/discord';
 import { getGameWalletSigner, getProvider, getOnChainBalanceWei, estimateTransferGas } from '../utils/wallet';
 import { executeWinnerPayout, executeRefund } from './payout.service';
 import { verifyMatchDuration, validateScores, generatePayoutToken, verifyPayoutToken } from '../middleware/security';
@@ -144,6 +145,11 @@ function validateTickPhysics(
     const maxTicksAllowed = Math.ceil(serverDurationSec * TICKS_PER_SECOND * RATE_BUFFER);
 
     if (ticks.length > maxTicksAllowed) {
+      // Fire-and-forget Discord alert — don't block validation
+      sendSecurityAlert(
+        `**SPEEDHACK DETECTED**\nTicks: ${ticks.length} (max ${maxTicksAllowed})\nServer duration: ${serverDurationSec.toFixed(1)}s\nSeed: \`${matchSeed || 'none'}\``,
+        'error'
+      ).catch(() => {});
       return {
         valid: false,
         reason: `Tick rate ceiling exceeded: ${ticks.length} ticks in ${serverDurationSec.toFixed(1)}s (max ${maxTicksAllowed}). Possible speedhack or lag-switch dump.`,
@@ -436,6 +442,10 @@ export async function claimPayout(payoutToken: string, claimerId: string) {
 
   if (claimLock.count === 0) {
     // Another concurrent request already grabbed this claim, or match state changed
+    sendSecurityAlert(
+      `**BLOCKED CONCURRENT CLAIM**\nMatch: \`${matchId}\`\nClaimer: \`${claimerId}\`\nAttempted by: \`${winnerId}\``,
+      'warn'
+    ).catch(() => {});
     const match = await prisma.match.findUnique({
       where: { id: matchId },
       select: { status: true, winnerId: true, payoutTxHash: true },
