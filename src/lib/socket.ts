@@ -153,6 +153,16 @@ export function onPerkUsed(callback: (data: { playerId: string; perk: string }) 
   return () => { socket?.off('game:perk', callback); };
 }
 
+export function onDepositConfirmed(callback: (data: { amount: string; txHash: string; newBalance: string | null }) => void) {
+  socket?.on('deposit_confirmed', callback);
+  return () => { socket?.off('deposit_confirmed', callback); };
+}
+
+export function onPurchaseConfirmed(callback: (data: { txHash: string; amount: string }) => void) {
+  socket?.on('purchase_confirmed', callback);
+  return () => { socket?.off('purchase_confirmed', callback); };
+}
+
 export function onNotification(callback: (data: { type: string; message: string }) => void) {
   socket?.on('notification', callback);
   return () => { socket?.off('notification', callback); };

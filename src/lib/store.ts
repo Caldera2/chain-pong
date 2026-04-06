@@ -9,6 +9,7 @@ import {
   apiSubmitResult,
   apiCreateMatch,
   apiPurchaseBoard,
+  apiSyncPurchases,
   clearTokens,
   getAccessToken,
   type LeaderboardEntry as ApiLeaderboardEntry,
@@ -81,9 +82,15 @@ interface GameStore {
   // Boards
   boards: Board[];
   buyBoard: (id: string, walletTxHash?: string) => Promise<{ success: boolean; error?: string }>;
-  purchaseStatus: 'idle' | 'signing' | 'confirming' | 'success' | 'error';
+  purchaseStatus: 'idle' | 'signing' | 'confirming' | 'processing' | 'success' | 'error';
   purchaseError: string | null;
-  setPurchaseStatus: (status: 'idle' | 'signing' | 'confirming' | 'success' | 'error', error?: string) => void;
+  setPurchaseStatus: (status: 'idle' | 'signing' | 'confirming' | 'processing' | 'success' | 'error', error?: string) => void;
+
+  // Pending transactions (txHashes sent via MetaMask but not yet confirmed by backend)
+  pendingTransactions: string[];
+  addPendingTransaction: (txHash: string) => void;
+  removePendingTransaction: (txHash: string) => void;
+  syncPendingPurchases: () => Promise<void>;
 
   // Game State
   screen: 'splash' | 'login' | 'signup' | 'forgot-password' | 'lobby' | 'mode-select' | 'matchmaking' | 'game' | 'result' | 'leaderboard' | 'shop' | 'profile' | 'withdraw' | 'deposit' | 'transactions' | 'tutorial' | 'referral';
@@ -1597,6 +1604,58 @@ export const useGameStore = create<GameStore>((set, get) => ({
   purchaseError: null,
   setPurchaseStatus: (status, error) => set({ purchaseStatus: status, purchaseError: error || null }),
 
+  // Pending transactions — persisted to localStorage
+  pendingTransactions: (() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = localStorage.getItem('chainpong-pending-txs');
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  })(),
+
+  addPendingTransaction: (txHash) => {
+    const current = get().pendingTransactions;
+    if (current.includes(txHash)) return;
+    const updated = [...current, txHash];
+    set({ pendingTransactions: updated });
+    try { localStorage.setItem('chainpong-pending-txs', JSON.stringify(updated)); } catch {}
+  },
+
+  removePendingTransaction: (txHash) => {
+    const updated = get().pendingTransactions.filter((h) => h !== txHash);
+    set({ pendingTransactions: updated });
+    try { localStorage.setItem('chainpong-pending-txs', JSON.stringify(updated)); } catch {}
+  },
+
+  syncPendingPurchases: async () => {
+    const state = get();
+    if (state.pendingTransactions.length === 0) return;
+
+    try {
+      const result = await apiSyncPurchases(state.pendingTransactions);
+      if (result.success && result.data) {
+        const { reconciled, alreadyOwned } = result.data;
+        // Remove resolved txHashes
+        const resolved = [...reconciled, ...alreadyOwned];
+        if (resolved.length > 0) {
+          const remaining = state.pendingTransactions.filter((h) => !resolved.includes(h));
+          set({ pendingTransactions: remaining });
+          try { localStorage.setItem('chainpong-pending-txs', JSON.stringify(remaining)); } catch {}
+
+          // Refresh board ownership from backend
+          const profileRes = await apiGetProfile();
+          if (profileRes.success && profileRes.data) {
+            const ownedIds = profileRes.data.boards.map((b) => b.id);
+            const newBoards = state.boards.map((b) => ({ ...b, owned: ownedIds.includes(b.id) }));
+            set({ boards: newBoards });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[SYNC] Purchase sync failed:', err);
+    }
+  },
+
   buyBoard: async (id, walletTxHash?) => {
     const state = get();
     const board = state.boards.find((b) => b.id === id);
@@ -1605,20 +1664,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     set({ purchaseStatus: 'confirming', purchaseError: null });
 
+    // If wallet user has a txHash, track it as pending BEFORE the API call
+    // so we can recover if the API call fails
+    if (walletTxHash) {
+      get().addPendingTransaction(walletTxHash);
+    }
+
     try {
-      // Call the backend API — this handles:
-      // 1. Balance verification
-      // 2. On-chain ETH transfer (for email/game-wallet users)
-      // 3. DB ownership record + transaction log
-      // For wallet users, pass the txHash from MetaMask signing
       const result = await apiPurchaseBoard(id, walletTxHash);
 
       if (!result.success) {
+        // If we have a txHash, the money already left the wallet.
+        // Show "processing" instead of "error" to avoid user panic.
+        if (walletTxHash) {
+          set({ purchaseStatus: 'processing', purchaseError: null });
+          // Auto-sync will reconcile this later
+          return { success: false, error: 'processing' };
+        }
         set({ purchaseStatus: 'error', purchaseError: result.error || 'Purchase failed' });
         return { success: false, error: result.error };
       }
 
-      // Only update local state AFTER server confirms
+      // Server confirmed — update local state
+      if (walletTxHash) {
+        get().removePendingTransaction(walletTxHash);
+      }
+
       const newBoards = state.boards.map((b) => (b.id === id ? { ...b, owned: true } : b));
       const price = board.price;
       set({
@@ -1628,10 +1699,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         purchaseError: null,
       });
 
-      // Reset status after a moment
       setTimeout(() => set({ purchaseStatus: 'idle' }), 2000);
       return { success: true };
     } catch (err: any) {
+      // If wallet tx was sent, keep "processing" state instead of error
+      if (walletTxHash) {
+        set({ purchaseStatus: 'processing', purchaseError: null });
+        return { success: false, error: 'processing' };
+      }
       const errorMsg = err?.message || 'Purchase failed';
       set({ purchaseStatus: 'error', purchaseError: errorMsg });
       setTimeout(() => set({ purchaseStatus: 'idle', purchaseError: null }), 4000);

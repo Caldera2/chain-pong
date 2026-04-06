@@ -127,6 +127,27 @@ router.post('/boards/purchase', requireAuth, async (req: AuthRequest, res: Respo
 });
 
 // ─────────────────────────────────────────────────────────
+// POST /api/player/sync-purchases — Reconcile missed purchases
+//
+// If a wallet user's MetaMask tx succeeded but the API call
+// timed out, the frontend sends pending txHashes here to
+// retroactively create ownership records.
+// ─────────────────────────────────────────────────────────
+router.post('/sync-purchases', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { txHashes } = req.body;
+    if (!Array.isArray(txHashes) || txHashes.length === 0) {
+      res.status(400).json({ success: false, error: 'txHashes array is required' });
+      return;
+    }
+    const result = await playerService.syncPurchases(req.user!.userId, txHashes);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
 // GET /api/player/transactions — Transaction history
 // ─────────────────────────────────────────────────────────
 router.get('/transactions', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {

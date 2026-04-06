@@ -2,16 +2,17 @@
 
 import { useGameStore, Board } from '@/lib/store';
 import { IS_TESTNET, CHAIN_NAME, TOKEN_SYMBOL, ACTIVE_CHAIN } from '@/lib/wagmi';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   ArrowLeft, Check, Wallet, Lock, Loader2,
-  ShieldCheck, AlertTriangle, X,
+  ShieldCheck, AlertTriangle, X, RefreshCw,
 } from 'lucide-react';
 import { useSendTransaction, useWaitForTransactionReceipt, useAccount, useSwitchChain } from 'wagmi';
 import { parseEther } from 'viem';
+import { getSocket, onPurchaseConfirmed, onDepositConfirmed } from '@/lib/socket';
 
 // Treasury address for wallet-user on-chain purchases
 const TREASURY_ADDRESS = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || '0x25f771D0B086602FEc043B6cCa1eD3E5fDcd8F1d';
@@ -106,13 +107,15 @@ function PurchaseModal({
   error,
   onConfirm,
   onClose,
+  onSync,
   authMethod,
 }: {
   board: Board;
-  status: 'confirm' | 'signing' | 'confirming' | 'success' | 'error';
+  status: 'confirm' | 'signing' | 'confirming' | 'processing' | 'success' | 'error';
   error: string | null;
   onConfirm: () => void;
   onClose: () => void;
+  onSync: () => void;
   authMethod: string;
 }) {
   const rs = RARITY_STYLES[board.rarity] || RARITY_STYLES.common;
@@ -126,7 +129,7 @@ function PurchaseModal({
       <Card className="relative z-10 w-full max-w-sm border-border/60">
         <CardContent className="p-5 sm:p-6 space-y-5">
           {/* Close button */}
-          {(status === 'confirm' || status === 'error' || status === 'success') && (
+          {(status === 'confirm' || status === 'error' || status === 'success' || status === 'processing') && (
             <button onClick={onClose} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground">
               <X className="w-4 h-4" />
             </button>
@@ -186,6 +189,19 @@ function PurchaseModal({
             </div>
           )}
 
+          {status === 'processing' && (
+            <div className="text-center space-y-3 py-2">
+              <Loader2 className="w-8 h-8 animate-spin text-amber-400 mx-auto" />
+              <p className="text-sm font-medium text-amber-400">Processing on Base...</p>
+              <p className="text-xs text-muted-foreground">
+                Your ETH was sent successfully. The server is catching up — this will resolve automatically.
+              </p>
+              <Button variant="outline" size="sm" onClick={onSync} className="mt-2">
+                <RefreshCw className="w-3 h-3 mr-1" /> Sync Now
+              </Button>
+            </div>
+          )}
+
           {status === 'success' && (
             <div className="text-center space-y-3 py-2">
               <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto">
@@ -218,17 +234,75 @@ export default function Shop() {
   const {
     boards, buyBoard, balance, walletBalance, authMethod,
     setScreen, purchaseStatus, purchaseError,
+    pendingTransactions, removePendingTransaction, syncPendingPurchases, syncFromBackend,
   } = useGameStore();
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [selectedBoard, setSelectedBoard] = useState<Board | null>(null);
-  const [modalStatus, setModalStatus] = useState<'confirm' | 'signing' | 'confirming' | 'success' | 'error'>('confirm');
+  const [modalStatus, setModalStatus] = useState<'confirm' | 'signing' | 'confirming' | 'processing' | 'success' | 'error'>('confirm');
   const [modalError, setModalError] = useState<string | null>(null);
   const [buyingBoardId, setBuyingBoardId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const lastTxHashRef = useRef<string | null>(null);
 
   // Wagmi: send transaction + chain switching (for wallet users only)
   const { sendTransactionAsync } = useSendTransaction();
   const { chainId: walletChainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
+
+  // Listen for purchase_confirmed / deposit_confirmed socket events
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handlePurchaseConfirmed = (data: { txHash: string }) => {
+      // If this txHash matches our pending purchase, resolve it
+      if (lastTxHashRef.current === data.txHash || pendingTransactions.includes(data.txHash)) {
+        removePendingTransaction(data.txHash);
+        setModalStatus('success');
+        syncFromBackend(); // Refresh board ownership
+      }
+    };
+
+    const handleDepositConfirmed = (data: { txHash: string }) => {
+      // Same check — a deposit to treasury IS the purchase payment
+      if (lastTxHashRef.current === data.txHash || pendingTransactions.includes(data.txHash)) {
+        removePendingTransaction(data.txHash);
+        setModalStatus('success');
+        syncFromBackend();
+      }
+    };
+
+    socket.on('purchase_confirmed', handlePurchaseConfirmed);
+    socket.on('deposit_confirmed', handleDepositConfirmed);
+    return () => {
+      socket.off('purchase_confirmed', handlePurchaseConfirmed);
+      socket.off('deposit_confirmed', handleDepositConfirmed);
+    };
+  }, [pendingTransactions, removePendingTransaction, syncFromBackend]);
+
+  // Auto-sync pending purchases on mount and every 30s while there are pending txs
+  useEffect(() => {
+    if (pendingTransactions.length === 0) return;
+
+    // Immediate sync on mount
+    syncPendingPurchases();
+
+    const interval = setInterval(() => {
+      syncPendingPurchases();
+    }, 30_000);
+
+    return () => clearInterval(interval);
+  }, [pendingTransactions.length, syncPendingPurchases]);
+
+  const handleManualSync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await syncPendingPurchases();
+      await syncFromBackend();
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncPendingPurchases, syncFromBackend]);
 
   const effectiveBalance = authMethod === 'wallet' ? walletBalance : balance;
 
@@ -284,17 +358,27 @@ export default function Shop() {
       // ── Step 2: Call backend API to record purchase ──
       // For wallet users, pass the txHash from MetaMask
       // For email users, backend sends ETH from game wallet
+      if (txHash) lastTxHashRef.current = txHash;
       const result = await buyBoard(selectedBoard.id, txHash);
 
       if (result.success) {
         setModalStatus('success');
+        lastTxHashRef.current = null;
+      } else if (result.error === 'processing') {
+        // Money left wallet but API failed — show "Processing on Base"
+        setModalStatus('processing');
       } else {
         setModalStatus('error');
         setModalError(result.error || 'Purchase failed on server');
       }
     } catch (err: any) {
-      setModalStatus('error');
-      setModalError(err?.message || 'Unexpected error');
+      // If txHash exists, money left wallet — show processing instead of error
+      if (txHash) {
+        setModalStatus('processing');
+      } else {
+        setModalStatus('error');
+        setModalError(err?.message || 'Unexpected error');
+      }
     } finally {
       setBuyingBoardId(null);
     }
@@ -340,10 +424,22 @@ export default function Shop() {
               <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">Skill Shop</h1>
               <p className="text-sm text-muted-foreground mt-0.5">Boards with unique perks to give you an edge</p>
             </div>
-            <div className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5">
-              <Wallet className="w-3.5 h-3.5 text-primary" />
-              <span className="font-semibold text-primary">{effectiveBalance.toFixed(4)}</span>
-              <span className="text-muted-foreground text-xs">{TOKEN_SYMBOL}</span>
+            <div className="flex items-center gap-2">
+              {pendingTransactions.length > 0 && (
+                <button
+                  onClick={handleManualSync}
+                  disabled={syncing}
+                  className="flex items-center gap-1 text-xs text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-lg px-2.5 py-1.5 hover:bg-amber-500/20 transition-colors"
+                >
+                  {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {pendingTransactions.length} pending
+                </button>
+              )}
+              <div className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5">
+                <Wallet className="w-3.5 h-3.5 text-primary" />
+                <span className="font-semibold text-primary">{effectiveBalance.toFixed(4)}</span>
+                <span className="text-muted-foreground text-xs">{TOKEN_SYMBOL}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -394,6 +490,7 @@ export default function Shop() {
           error={modalError}
           onConfirm={handleConfirmPurchase}
           onClose={handleCloseModal}
+          onSync={handleManualSync}
           authMethod={authMethod || 'email'}
         />
       )}

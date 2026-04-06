@@ -62,11 +62,26 @@ function getTimeoutForEndpoint(endpoint: string): number {
   return TIMEOUT_FAST;
 }
 
+// Track whether a token refresh is already in-flight to prevent stampede
+let refreshInFlight: Promise<boolean> | null = null;
+
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  _retryCount = 0
 ): Promise<{ success: boolean; data?: T; error?: string }> {
   if (!accessToken) loadTokens();
+
+  // Pre-flight: refresh token if expiring within 60s (catches MetaMask popup delays)
+  if (accessToken) {
+    const exp = getTokenExpiry(accessToken);
+    if (exp) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (exp - nowSec < 60 && refreshToken) {
+        await tryRefresh();
+      }
+    }
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -91,19 +106,12 @@ async function request<T>(
 
     clearTimeout(timeout);
 
-    // If 401, try refreshing token
-    if (res.status === 401 && refreshToken) {
+    // If 401, try refreshing token and retry ONCE
+    if (res.status === 401 && refreshToken && _retryCount < 1) {
       const refreshed = await tryRefresh();
       if (refreshed) {
-        headers['Authorization'] = `Bearer ${accessToken}`;
-        const controller2 = new AbortController();
-        const timeout2 = setTimeout(() => controller2.abort(), timeoutMs);
-        res = await fetch(`${API_BASE}${endpoint}`, {
-          ...options,
-          headers,
-          signal: controller2.signal,
-        });
-        clearTimeout(timeout2);
+        // Retry the original request with fresh token
+        return request<T>(endpoint, options, _retryCount + 1);
       }
     }
 
@@ -163,24 +171,42 @@ export async function ensureValidToken(): Promise<boolean> {
 }
 
 async function tryRefresh(): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_FAST);
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    const json = await res.json();
-    if (json.success && json.data) {
-      saveTokens(json.data.accessToken, json.data.refreshToken);
-      return true;
+  // Deduplicate: if a refresh is already in-flight, wait for it
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    try {
+      if (!refreshToken) return false;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), TIMEOUT_FAST);
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const json = await res.json();
+      if (json.success && json.data) {
+        saveTokens(json.data.accessToken, json.data.refreshToken);
+        return true;
+      }
+      // Server explicitly rejected the refresh token — clear tokens
+      clearTokens();
+      return false;
+    } catch {
+      // Network error during refresh — do NOT clear tokens.
+      // The access token might still be valid, or we can retry later.
+      console.warn('[AUTH] Token refresh network error — keeping existing tokens');
+      return false;
     }
-  } catch {}
-  clearTokens();
-  return false;
+  })();
+
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
 }
 
 // ─── Auth API ───────────────────────────────────────────
@@ -320,6 +346,13 @@ export async function apiPurchaseBoard(boardId: string, txHash?: string) {
   return request<{ boardId: string; boardName: string; message: string }>('/player/boards/purchase', {
     method: 'POST',
     body: JSON.stringify({ boardId, txHash }),
+  });
+}
+
+export async function apiSyncPurchases(txHashes: string[]) {
+  return request<{ reconciled: string[]; alreadyOwned: string[]; failed: string[] }>('/player/sync-purchases', {
+    method: 'POST',
+    body: JSON.stringify({ txHashes }),
   });
 }
 

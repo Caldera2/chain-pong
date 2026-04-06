@@ -307,6 +307,111 @@ export async function purchaseBoard(userId: string, boardId: string, txHash?: st
 }
 
 // ─────────────────────────────────────────────────────────
+// Sync Purchases — Reconcile missed board purchases
+//
+// When a wallet user sends ETH via MetaMask but the API call
+// times out, the board ownership record is never created.
+// This endpoint checks the chain for any txHashes the frontend
+// reports and reconciles ownership records.
+// ─────────────────────────────────────────────────────────
+
+export async function syncPurchases(
+  userId: string,
+  pendingTxHashes: string[]
+): Promise<{ reconciled: string[]; alreadyOwned: string[]; failed: string[] }> {
+  const reconciled: string[] = [];
+  const alreadyOwned: string[] = [];
+  const failed: string[] = [];
+
+  if (!pendingTxHashes.length) return { reconciled, alreadyOwned, failed };
+
+  const provider = new ethers.JsonRpcProvider(env.RPC_URL);
+
+  for (const txHash of pendingTxHashes.slice(0, 10)) { // Cap at 10 to prevent abuse
+    try {
+      // Check if we already recorded this tx as a purchase
+      const existingTx = await prisma.transaction.findFirst({
+        where: { txHash, type: 'BOARD_PURCHASE', userId },
+      });
+      if (existingTx) {
+        alreadyOwned.push(txHash);
+        continue;
+      }
+
+      // Verify the transaction exists on-chain and is confirmed
+      const receipt = await provider.getTransactionReceipt(txHash);
+      if (!receipt || receipt.status !== 1) {
+        failed.push(txHash);
+        continue;
+      }
+
+      // Get the transaction to verify it was sent to treasury
+      const tx = await provider.getTransaction(txHash);
+      if (!tx) {
+        failed.push(txHash);
+        continue;
+      }
+
+      const toAddress = tx.to?.toLowerCase();
+      const treasuryAddress = env.TREASURY_ADDRESS?.toLowerCase();
+      if (!treasuryAddress || toAddress !== treasuryAddress) {
+        failed.push(txHash);
+        continue;
+      }
+
+      // Find which board this amount matches
+      const valueEth = parseFloat(ethers.formatEther(tx.value));
+      const matchingBoard = await prisma.board.findFirst({
+        where: {
+          isActive: true,
+          price: { gte: new Decimal(valueEth * 0.99), lte: new Decimal(valueEth * 1.01) }, // 1% tolerance for gas
+        },
+      });
+
+      if (!matchingBoard) {
+        failed.push(txHash);
+        continue;
+      }
+
+      // Check if user already owns this board
+      const owned = await prisma.userBoard.findUnique({
+        where: { userId_boardId: { userId, boardId: matchingBoard.id } },
+      });
+      if (owned) {
+        alreadyOwned.push(txHash);
+        continue;
+      }
+
+      // Reconcile: create ownership + transaction record
+      await prisma.$transaction([
+        prisma.userBoard.create({
+          data: { userId, boardId: matchingBoard.id, txHash },
+        }),
+        prisma.transaction.create({
+          data: {
+            userId,
+            type: 'BOARD_PURCHASE',
+            amount: new Decimal(valueEth),
+            status: 'CONFIRMED',
+            txHash,
+            metadata: { boardId: matchingBoard.id, boardName: matchingBoard.name, reconciled: true },
+            confirmedAt: new Date(),
+          },
+        }),
+      ]);
+
+      console.log(`[SYNC-PURCHASE] Reconciled board "${matchingBoard.name}" for user ${userId} tx ${txHash}`);
+      reconciled.push(txHash);
+    } catch (err: any) {
+      console.error(`[SYNC-PURCHASE] Error processing tx ${txHash}:`, err.message);
+      failed.push(txHash);
+    }
+  }
+
+  return { reconciled, alreadyOwned, failed };
+}
+
+// ─────────────────────────────────────────────────────────
 // Get Transaction History
 // ─────────────────────────────────────────────────────────
 

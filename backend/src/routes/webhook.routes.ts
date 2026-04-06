@@ -112,11 +112,17 @@ router.post('/alchemy-deposit', async (req: Request, res: Response) => {
                 type: 'deposit',
                 message: `Deposit received: ${valueEth} ETH`,
               });
-              // Emit specific deposit event for frontend balance update
-              (s as any).emit('deposit_confirmed', {
+              // Emit deposit_confirmed for frontend balance update
+              s.emit('deposit_confirmed', {
                 amount: valueEth.toString(),
                 txHash,
                 newBalance: null, // Frontend should refetch
+              });
+              // Emit purchase_confirmed so pending purchase UI can resolve
+              // (frontend checks if this txHash matches a pending board purchase)
+              s.emit('purchase_confirmed', {
+                txHash,
+                amount: valueEth.toString(),
               });
               break;
             }
