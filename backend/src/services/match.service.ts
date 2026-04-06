@@ -119,7 +119,8 @@ function validateTickPhysics(
   ticks: any[],
   player1Score: number,
   player2Score: number,
-  matchSeed?: string | null
+  matchSeed?: string | null,
+  serverDurationMs?: number | null
 ): TickValidationResult {
   const warnings: string[] = [];
 
@@ -128,6 +129,28 @@ function validateTickPhysics(
   }
 
   const totalPoints = player1Score + player2Score;
+
+  // ── Tick Rate Ceiling (anti-speedhack / anti-lag-switch) ──
+  // At 60fps logging every 30 frames, the engine produces ~2 ticks/second.
+  // If the server tracked the wall-clock match duration, the maximum
+  // possible ticks = (durationSec * 2). A 10% buffer accounts for
+  // network jitter and timing variance. Anything beyond that means
+  // the client ran at an accelerated framerate (speedhack) or dumped
+  // queued ticks from a lag switch.
+  if (serverDurationMs && serverDurationMs > 0) {
+    const serverDurationSec = serverDurationMs / 1000;
+    const TICKS_PER_SECOND = 2; // 60fps / 30-frame interval
+    const RATE_BUFFER = 1.10;   // 10% tolerance
+    const maxTicksAllowed = Math.ceil(serverDurationSec * TICKS_PER_SECOND * RATE_BUFFER);
+
+    if (ticks.length > maxTicksAllowed) {
+      return {
+        valid: false,
+        reason: `Tick rate ceiling exceeded: ${ticks.length} ticks in ${serverDurationSec.toFixed(1)}s (max ${maxTicksAllowed}). Possible speedhack or lag-switch dump.`,
+        warnings,
+      };
+    }
+  }
 
   // ── Seed-based first trajectory validation ────────
   // If the server generated a matchSeed, verify the first tick's
@@ -392,41 +415,87 @@ export async function claimPayout(payoutToken: string, claimerId: string) {
     throw new ForbiddenError('Only the match winner can claim the payout');
   }
 
-  // Re-verify match is completed and this user won
-  const match = await prisma.match.findUnique({
-    where: { id: matchId },
-    select: { status: true, winnerId: true, payoutTxHash: true },
+  // ── Atomic Claim Mutex ─────────────────────────────
+  // Race condition defense: if 50 concurrent requests hit this endpoint,
+  // all would read payoutTxHash as null and proceed to payout.
+  // Instead, use an atomic conditional update — only the FIRST request
+  // that matches (status=COMPLETED, winnerId=correct, payoutTxHash=null)
+  // will succeed. All others get count=0 and abort immediately.
+  // This is a database-level mutex — no application-level locks needed.
+  const claimLock = await prisma.match.updateMany({
+    where: {
+      id: matchId,
+      status: 'COMPLETED',
+      winnerId,
+      payoutTxHash: null, // Only grab if no one else has claimed
+    },
+    data: {
+      payoutTxHash: 'CLAIMING', // Sentinel value — replaced with real txHash after payout
+    },
   });
 
-  if (!match) throw new NotFoundError('Match not found');
-  if (match.status !== 'COMPLETED') throw new BadRequestError('Match is not completed');
-  if (match.winnerId !== winnerId) throw new ForbiddenError('Winner mismatch');
-  if (match.payoutTxHash) throw new BadRequestError('Payout already claimed');
-
-  // Use verified pot from confirmed DB transactions, NOT from the token
-  const verifiedPot = await getVerifiedPotAmount(matchId);
-  if (verifiedPot <= 0) {
-    throw new BadRequestError('No confirmed stakes found for this match');
+  if (claimLock.count === 0) {
+    // Another concurrent request already grabbed this claim, or match state changed
+    const match = await prisma.match.findUnique({
+      where: { id: matchId },
+      select: { status: true, winnerId: true, payoutTxHash: true },
+    });
+    if (!match) throw new NotFoundError('Match not found');
+    if (match.payoutTxHash) throw new BadRequestError('Payout already claimed or in progress');
+    if (match.status !== 'COMPLETED') throw new BadRequestError('Match is not completed');
+    if (match.winnerId !== winnerId) throw new ForbiddenError('Winner mismatch');
+    throw new BadRequestError('Claim failed — please try again');
   }
 
-  // If verified pot differs significantly from token, flag it
-  if (Math.abs(verifiedPot - potAmount) > 0.0001) {
-    console.warn(`[CLAIM] Pot mismatch for match ${matchId}: token=${potAmount}, verified=${verifiedPot}. Using verified amount.`);
+  // ── We now hold the exclusive claim lock ───────────
+
+  try {
+    // Use verified pot from confirmed DB transactions, NOT from the token
+    const verifiedPot = await getVerifiedPotAmount(matchId);
+    if (verifiedPot <= 0) {
+      // Release lock — no valid pot
+      await prisma.match.update({ where: { id: matchId }, data: { payoutTxHash: null } });
+      throw new BadRequestError('No confirmed stakes found for this match');
+    }
+
+    // If verified pot differs significantly from token, flag it
+    if (Math.abs(verifiedPot - potAmount) > 0.0001) {
+      console.warn(`[CLAIM] Pot mismatch for match ${matchId}: token=${potAmount}, verified=${verifiedPot}. Using verified amount.`);
+    }
+
+    // Execute the actual blockchain transfer
+    const result = await executeWinnerPayout(winnerAddress, verifiedPot, matchId);
+
+    if (!result.success) {
+      // Release lock — payout failed
+      await prisma.match.update({ where: { id: matchId }, data: { payoutTxHash: null } });
+      throw new BadRequestError(`Payout failed: ${result.error}`);
+    }
+
+    // Replace sentinel with real txHash
+    await prisma.match.update({
+      where: { id: matchId },
+      data: { payoutTxHash: result.txHash },
+    });
+
+    return {
+      matchId,
+      txHash: result.txHash,
+      winnerPayout: result.winnerPayout,
+      protocolFee: result.protocolFee,
+    };
+  } catch (err) {
+    // If anything throws after acquiring the lock, release it so the
+    // user can retry (unless it was already released above)
+    const current = await prisma.match.findUnique({
+      where: { id: matchId },
+      select: { payoutTxHash: true },
+    });
+    if (current?.payoutTxHash === 'CLAIMING') {
+      await prisma.match.update({ where: { id: matchId }, data: { payoutTxHash: null } }).catch(() => {});
+    }
+    throw err;
   }
-
-  // Execute the actual blockchain transfer
-  const result = await executeWinnerPayout(winnerAddress, verifiedPot, matchId);
-
-  if (!result.success) {
-    throw new BadRequestError(`Payout failed: ${result.error}`);
-  }
-
-  return {
-    matchId,
-    txHash: result.txHash,
-    winnerPayout: result.winnerPayout,
-    protocolFee: result.protocolFee,
-  };
 }
 
 // ─────────────────────────────────────────────────────────
@@ -591,7 +660,12 @@ export async function submitMatchResult(
   // Runs mathematical validation on the tick log to catch
   // fabricated game data from scripts/bots.
   if (tickLog && Array.isArray(tickLog) && tickLog.length > 0) {
-    const physicsCheck = validateTickPhysics(tickLog, player1Score, player2Score, match.matchSeed);
+    // Server-side wall-clock duration for tick rate ceiling check
+    const serverDurationMs = match.startedAt
+      ? Date.now() - match.startedAt.getTime()
+      : null;
+
+    const physicsCheck = validateTickPhysics(tickLog, player1Score, player2Score, match.matchSeed, serverDurationMs);
 
     if (physicsCheck.warnings.length > 0) {
       console.warn(`[MATCH] Tick warnings for ${matchId}:`, physicsCheck.warnings);

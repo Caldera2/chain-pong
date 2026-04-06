@@ -216,6 +216,8 @@ contract ChainPongEscrow {
     // ══════════════════════════════════════════════════════
 
     /// @notice Verify a resolver-signed EIP-712 match permit. Prevents ghost matches.
+    /// @dev Anti-MEV: requires msg.sender == player so a front-running bot cannot
+    ///      copy a permit from the mempool and submit it from their own address.
     function _verifyMatchPermit(
         bytes32 matchId,
         address player,
@@ -223,6 +225,11 @@ contract ChainPongEscrow {
         uint256 deadline,
         bytes memory signature
     ) internal {
+        // Anti-MEV front-running: the wallet broadcasting the tx must be
+        // the exact same wallet authorized in the backend-signed permit.
+        // Without this, a bot could copy permit calldata from the mempool
+        // and submit it with higher gas from their own address.
+        require(msg.sender == player, "Sender must match permit player");
         require(block.timestamp <= deadline, "Permit expired");
 
         bytes32 permitHash = keccak256(abi.encode(
