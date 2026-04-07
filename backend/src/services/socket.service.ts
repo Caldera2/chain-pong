@@ -68,15 +68,39 @@ export function initializeSocket(httpServer: HttpServer): Server {
   });
 
   // ─── Mid-Session Token Validation ──────────────────
-  // Re-verify JWT on every inbound event. If expired, emit auth_error
-  // so the client can silently refresh and reconnect.
+  // Re-verify JWT on every inbound event. If expired, allow a 30s
+  // grace period for users in matchmaking or active games so the
+  // client can silently refresh without losing their session.
   io.on('connection', (socket: AuthSocket) => {
     socket.use((event, nextMw) => {
       const token = socket.handshake.auth.token;
       if (token) {
         try {
           verifyAccessToken(token as string);
-        } catch {
+        } catch (err: any) {
+          // Grace period: if the user is in matchmaking or an active game,
+          // allow events for 30s after token expiry to give the client
+          // time to silently refresh and reconnect.
+          const userId = socket.user?.userId;
+          const isInMatchmaking = userId && matchmakingQueue.isInQueue(userId);
+          const isInActiveGame = userId && Array.from(activeGames.values()).some(
+            (g) => onlineUsers.get(userId) === g.p1 || onlineUsers.get(userId) === g.p2
+          );
+
+          if (isInMatchmaking || isInActiveGame) {
+            // Check if the token expired within the last 30 seconds
+            try {
+              const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+              const expiredAgo = Math.floor(Date.now() / 1000) - (decoded.exp || 0);
+              if (expiredAgo <= 30) {
+                // Within grace period — allow the event but notify client to refresh
+                socket.emit('auth_error', { message: 'Token expired. Please refresh silently.' });
+                nextMw();
+                return;
+              }
+            } catch {}
+          }
+
           socket.emit('auth_error', { message: 'Token expired. Reconnect with a fresh token.' });
         }
       }

@@ -20,7 +20,7 @@ const SALT_ROUNDS = 12;
 // ─────────────────────────────────────────────────────────
 
 export async function signupWithEmail(email: string, username: string, password: string) {
-  // Check uniqueness
+  // Check uniqueness (pre-flight to give clean error messages)
   const existing = await prisma.user.findFirst({
     where: { OR: [{ email }, { username }] },
   });
@@ -30,31 +30,75 @@ export async function signupWithEmail(email: string, username: string, password:
     throw new ConflictError('Username already taken');
   }
 
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  const wallet = generateGameWallet();
+  // Generate password hash and game wallet
+  let passwordHash: string;
+  let wallet: { address: string; privateKey: string; mnemonic: string; encryptedKey: string };
 
-  const user = await prisma.user.create({
-    data: {
-      email,
-      username,
-      passwordHash,
-      authMethod: 'EMAIL',
-      gameWallet: wallet.address,
-      encryptedKey: wallet.encryptedKey,
-      stats: { create: {} }, // create PlayerStats with defaults
-      ownedBoards: {
-        create: { boardId: 'classic' }, // everyone gets the classic board
+  try {
+    passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+  } catch (err: any) {
+    console.error('[SIGNUP] Password hashing failed:', err.message, err.stack);
+    throw new BadRequestError('Account creation failed — please try again');
+  }
+
+  try {
+    wallet = generateGameWallet();
+    if (!wallet.address || !wallet.encryptedKey || !wallet.mnemonic) {
+      throw new Error('Wallet generation returned incomplete data');
+    }
+  } catch (err: any) {
+    console.error('[SIGNUP] Wallet generation failed:', err.message, err.stack);
+    throw new BadRequestError('Wallet creation failed — please try again');
+  }
+
+  // Create user + stats + default board in a single Prisma transaction
+  // If any step fails, the entire operation rolls back cleanly
+  let user;
+  try {
+    user = await prisma.user.create({
+      data: {
+        email,
+        username,
+        passwordHash,
+        authMethod: 'EMAIL',
+        gameWallet: wallet.address,
+        encryptedKey: wallet.encryptedKey,
+        stats: { create: {} },
+        ownedBoards: {
+          create: { boardId: 'classic' },
+        },
       },
-    },
-    include: { stats: true },
-  });
+      include: { stats: true },
+    });
+  } catch (err: any) {
+    // Catch Prisma unique constraint violations (P2002)
+    // that can happen from race conditions between findFirst and create
+    if (err.code === 'P2002') {
+      const target = err.meta?.target;
+      if (Array.isArray(target) && target.includes('email')) {
+        throw new ConflictError('Email already registered');
+      }
+      if (Array.isArray(target) && target.includes('username')) {
+        throw new ConflictError('Username already taken');
+      }
+      if (Array.isArray(target) && target.includes('gameWallet')) {
+        // Extremely rare: wallet address collision. Retry with new wallet.
+        console.error('[SIGNUP] Wallet address collision — retrying');
+        throw new BadRequestError('Account creation failed — please try again');
+      }
+      throw new ConflictError('Account already exists');
+    }
+    console.error('[SIGNUP] User creation failed:', err.message, err.stack);
+    throw new BadRequestError('Account creation failed — please try again');
+  }
 
   const tokens = await generateTokens({ userId: user.id, username: user.username, authMethod: 'EMAIL' });
+
+  console.log(`[SIGNUP] New user created: ${user.id} (${email})`);
 
   return {
     user: sanitizeUser(user),
     ...tokens,
-    // Return seed phrase ONLY on signup — user must save it immediately
     seedPhrase: wallet.mnemonic,
   };
 }

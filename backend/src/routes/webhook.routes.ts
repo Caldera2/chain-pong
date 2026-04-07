@@ -99,6 +99,51 @@ router.post('/alchemy-deposit', async (req: Request, res: Response) => {
       console.log(`[WEBHOOK] Deposit detected: ${valueEth} ETH to ${toAddress} (user ${user.id}) tx ${txHash}`);
       processed++;
 
+      // ── Authoritative Purchase Fulfillment ───────────
+      // If this deposit is to the treasury and matches a pending board
+      // purchase, auto-create the board ownership record regardless of
+      // whether the frontend is still connected.
+      const treasuryAddress = env.TREASURY_ADDRESS?.toLowerCase();
+      if (treasuryAddress && toAddress === treasuryAddress) {
+        try {
+          // Find a PENDING board purchase for this user with a matching amount (1% tolerance)
+          const pendingPurchase = await prisma.transaction.findFirst({
+            where: {
+              userId: user.id,
+              type: 'BOARD_PURCHASE',
+              status: 'PENDING',
+              amount: { gte: new Decimal(valueEth * 0.99), lte: new Decimal(valueEth * 1.01) },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+
+          if (pendingPurchase) {
+            const boardId = (pendingPurchase.metadata as any)?.boardId;
+            if (boardId) {
+              // Check not already owned
+              const alreadyOwned = await prisma.userBoard.findUnique({
+                where: { userId_boardId: { userId: user.id, boardId } },
+              });
+
+              if (!alreadyOwned) {
+                await prisma.$transaction([
+                  prisma.userBoard.create({
+                    data: { userId: user.id, boardId, txHash },
+                  }),
+                  prisma.transaction.update({
+                    where: { id: pendingPurchase.id },
+                    data: { status: 'CONFIRMED', txHash, confirmedAt: new Date() },
+                  }),
+                ]);
+                console.log(`[WEBHOOK] Auto-fulfilled pending purchase: board "${boardId}" for user ${user.id}`);
+              }
+            }
+          }
+        } catch (fulfillErr: any) {
+          console.warn('[WEBHOOK] Purchase auto-fulfillment failed:', fulfillErr.message);
+        }
+      }
+
       // Push real-time update to the user via Socket.IO
       try {
         const io = getIO();

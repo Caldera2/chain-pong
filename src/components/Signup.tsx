@@ -2,13 +2,33 @@
 
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { apiSignup } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Wallet, Loader2, ArrowLeft, Copy, Check, ShieldAlert, User, Lock, Mail } from 'lucide-react';
+
+// Map backend error strings/codes to user-friendly messages
+function mapSignupError(error: string): string {
+  const lower = error.toLowerCase();
+  if (lower.includes('email already') || lower.includes('email taken') || lower.includes('409'))
+    return 'This email is already registered. Try logging in instead.';
+  if (lower.includes('username already') || lower.includes('username taken'))
+    return 'That username is taken. Pick a different one.';
+  if (lower.includes('wallet') && (lower.includes('fail') || lower.includes('busy') || lower.includes('503')))
+    return 'Wallet service is temporarily busy. Please try again in a moment.';
+  if (lower.includes('account already'))
+    return 'An account with these details already exists. Try logging in.';
+  if (lower.includes('account creation failed'))
+    return 'Something went wrong creating your account. Please try again.';
+  if (lower.includes('timeout') || lower.includes('timed out'))
+    return 'Server took too long to respond. Please try again.';
+  if (lower.includes('network') || lower.includes('fetch'))
+    return 'Could not reach the server. Check your connection and try again.';
+  return error;
+}
 
 const AVATARS = ['🏓', '⚡', '🔥', '💎', '🎯', '👑', '🌀', '🎮', '🤖', '🦊'];
 
@@ -22,6 +42,8 @@ export default function Signup() {
   const [selectedAvatar, setSelectedAvatar] = useState('🏓');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState('Creating...');
+  const walletTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [seedPhrase, setSeedPhrase] = useState('');
   const [seedCopied, setSeedCopied] = useState(false);
   const [seedConfirmed, setSeedConfirmed] = useState(false);
@@ -40,13 +62,21 @@ export default function Signup() {
   const strengthLabel = ['', 'Weak', 'Fair', 'Good', 'Strong'][passwordStrength];
   const strengthColor = ['', 'bg-red-500', 'bg-yellow-500', 'bg-primary', 'bg-emerald-500'][passwordStrength];
 
+  // Cleanup wallet generation timer on unmount
+  useEffect(() => {
+    return () => {
+      if (walletTimerRef.current) clearTimeout(walletTimerRef.current);
+    };
+  }, []);
+
   const handleStep1 = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     if (!email.trim()) return setError('Email is required');
-    if (!/\S+@\S+\.\S+/.test(email)) return setError('Enter a valid email');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return setError('Enter a valid email address');
     if (!password) return setError('Password is required');
     if (password.length < 6) return setError('Password must be at least 6 characters');
+    if (passwordStrength < 2) return setError('Password is too weak — add uppercase letters, numbers, or symbols');
     if (password !== confirmPassword) return setError('Passwords do not match');
     setStep(2);
   };
@@ -59,6 +89,13 @@ export default function Signup() {
     if (!/^[a-zA-Z0-9_-]+$/.test(username)) return setError('Letters, numbers, hyphens and underscores only');
 
     setLoading(true);
+    setLoadingMsg('Creating...');
+
+    // After 10s, show wallet generation message so user doesn't think it's stuck
+    walletTimerRef.current = setTimeout(() => {
+      setLoadingMsg('Generating your secure game wallet... this takes a moment');
+    }, 10_000);
+
     try {
       const res = await apiSignup(email, username, password, referralCode || undefined);
       if (res.success && res.data) {
@@ -70,11 +107,12 @@ export default function Signup() {
           signup(data.user.email || email, data.user.username, 'email');
         }
       } else {
-        setError(res.error || 'Signup failed. Please try again.');
+        setError(mapSignupError(res.error || 'Signup failed. Please try again.'));
       }
     } catch {
-      setError('Could not connect to server. Please try again.');
+      setError('Could not connect to server. Check your connection and try again.');
     } finally {
+      if (walletTimerRef.current) clearTimeout(walletTimerRef.current);
       setLoading(false);
     }
   };
@@ -272,7 +310,7 @@ export default function Signup() {
               {loading ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Creating...
+                  {loadingMsg}
                 </span>
               ) : (
                 'Create Account'

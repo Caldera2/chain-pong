@@ -73,6 +73,10 @@ interface GameStore {
   setBalance: (balance: number) => void;
   setWalletBalance: (balance: number) => void;
 
+  // Transaction lock — prevents auth logout while a blockchain tx is processing
+  transactionInProgress: boolean;
+  setTransactionInProgress: (inProgress: boolean) => void;
+
   // Player
   username: string;
   setUsername: (name: string) => void;
@@ -1538,6 +1542,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   logout: () => {
+    // GUARD: Never auto-logout while a blockchain transaction is in progress.
+    // This prevents the UI from dumping the user to the login screen while
+    // their ETH is still being confirmed on-chain.
+    if (get().transactionInProgress) {
+      console.warn('[AUTH] Logout blocked — transaction in progress');
+      return;
+    }
+
     // Backend logout (non-blocking)
     apiLogout().catch(() => {});
     clearTokens();
@@ -1561,8 +1573,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       currentMatchId: null,
       currentMatchSeed: null,
       currentConfigHash: null,
+      transactionInProgress: false,
     });
   },
+
+  // Transaction lock
+  transactionInProgress: false,
+  setTransactionInProgress: (inProgress) => set({ transactionInProgress: inProgress }),
 
   isConnected: false,
   address: null,
@@ -1571,10 +1588,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   gameWallet: initialAuth.gameWallet,
   setConnected: (connected, address) => {
     set({ isConnected: connected, address: address || null });
-    // If wallet disconnected and user was a wallet-auth user, log them out fully
+    // If wallet disconnected and user was a wallet-auth user, log them out
+    // UNLESS a transaction is in progress
     if (!connected) {
       const state = get();
-      if (state.authMethod === 'wallet' && state.isLoggedIn) {
+      if (state.authMethod === 'wallet' && state.isLoggedIn && !state.transactionInProgress) {
         state.logout();
       }
     }

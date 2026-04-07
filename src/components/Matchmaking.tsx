@@ -16,13 +16,22 @@ export default function Matchmaking() {
   const [error, setError] = useState<string | null>(null);
   const matchCreated = useRef(false);
 
+  // Keep token alive while user is in matchmaking queue
+  // JWT can expire during the wait — refresh every 4 minutes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      ensureValidToken().catch(() => {});
+    }, 4 * 60 * 1000); // 4 minutes
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (matchCreated.current) return;
     matchCreated.current = true;
 
     const createMatch = async () => {
       try {
-        // Step 0: Pre-flight token check — refresh if within 60s of expiry
+        // Step 0: Pre-flight token check — refresh if within 5min of expiry
         setStatus('Verifying session...');
         await ensureValidToken();
 

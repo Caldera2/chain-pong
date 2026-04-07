@@ -307,6 +307,40 @@ export async function purchaseBoard(userId: string, boardId: string, txHash?: st
 }
 
 // ─────────────────────────────────────────────────────────
+// Create Pending Purchase — Pre-register intent before MetaMask
+//
+// Called BEFORE MetaMask opens. Creates a PENDING transaction
+// record so the webhook can match incoming ETH to a board
+// purchase even if the frontend crashes or times out.
+// ─────────────────────────────────────────────────────────
+
+export async function createPendingPurchase(userId: string, boardId: string) {
+  const board = await prisma.board.findUnique({ where: { id: boardId } });
+  if (!board) throw new NotFoundError('Board not found');
+  if (!board.isActive) throw new BadRequestError('Board is not available');
+
+  const alreadyOwned = await prisma.userBoard.findUnique({
+    where: { userId_boardId: { userId, boardId } },
+  });
+  if (alreadyOwned) throw new ConflictError('You already own this board');
+
+  const price = Number(board.price);
+
+  // Create a PENDING transaction so the webhook can pick it up
+  const pendingTx = await prisma.transaction.create({
+    data: {
+      userId,
+      type: 'BOARD_PURCHASE',
+      amount: new Decimal(price),
+      status: 'PENDING',
+      metadata: { boardId, boardName: board.name, pendingPurchase: true },
+    },
+  });
+
+  return { pendingTxId: pendingTx.id, boardId: board.id, boardName: board.name, price };
+}
+
+// ─────────────────────────────────────────────────────────
 // Sync Purchases — Reconcile missed board purchases
 //
 // When a wallet user sends ETH via MetaMask but the API call

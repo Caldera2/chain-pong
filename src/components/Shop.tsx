@@ -13,6 +13,8 @@ import {
 import { useSendTransaction, useWaitForTransactionReceipt, useAccount, useSwitchChain } from 'wagmi';
 import { parseEther } from 'viem';
 import { getSocket, onPurchaseConfirmed, onDepositConfirmed } from '@/lib/socket';
+import { apiSyncPurchases } from '@/lib/api';
+import { Input } from '@/components/ui/input';
 
 // Treasury address for wallet-user on-chain purchases
 const TREASURY_ADDRESS = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || '0x25f771D0B086602FEc043B6cCa1eD3E5fDcd8F1d';
@@ -108,6 +110,7 @@ function PurchaseModal({
   onConfirm,
   onClose,
   onSync,
+  onManualHash,
   authMethod,
 }: {
   board: Board;
@@ -116,9 +119,12 @@ function PurchaseModal({
   onConfirm: () => void;
   onClose: () => void;
   onSync: () => void;
+  onManualHash: (hash: string) => void;
   authMethod: string;
 }) {
   const rs = RARITY_STYLES[board.rarity] || RARITY_STYLES.common;
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualHash, setManualHash] = useState('');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -199,6 +205,32 @@ function PurchaseModal({
               <Button variant="outline" size="sm" onClick={onSync} className="mt-2">
                 <RefreshCw className="w-3 h-3 mr-1" /> Sync Now
               </Button>
+              {/* Manual TxHash input for when auto-sync fails */}
+              <button
+                onClick={() => setShowManualInput(!showManualInput)}
+                className="text-[10px] text-muted-foreground hover:text-foreground underline mt-1"
+              >
+                {showManualInput ? 'Hide' : 'Have a transaction hash? Enter it manually'}
+              </button>
+              {showManualInput && (
+                <div className="flex gap-1.5 mt-1">
+                  <Input
+                    type="text"
+                    value={manualHash}
+                    onChange={(e) => setManualHash(e.target.value)}
+                    placeholder="0x..."
+                    className="text-xs h-8"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8 px-2.5 shrink-0"
+                    disabled={!manualHash.startsWith('0x') || manualHash.length < 10}
+                    onClick={() => { onManualHash(manualHash); setManualHash(''); }}
+                  >
+                    Verify
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -243,11 +275,33 @@ export default function Shop() {
   const [buyingBoardId, setBuyingBoardId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const lastTxHashRef = useRef<string | null>(null);
+  const purchaseLocked = useRef(false); // Debounce: prevent double-click
 
   // Wagmi: send transaction + chain switching (for wallet users only)
   const { sendTransactionAsync } = useSendTransaction();
   const { chainId: walletChainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
+
+  // Persistent loading state: restore "processing" modal on page refresh
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('chainpong-processing-board');
+      if (saved) {
+        const { boardId, timestamp } = JSON.parse(saved);
+        // Only restore if less than 10 minutes old
+        if (Date.now() - timestamp < 10 * 60 * 1000) {
+          const board = boards.find((b) => b.id === boardId);
+          if (board && !board.owned) {
+            setSelectedBoard(board);
+            setModalStatus('processing');
+            return;
+          }
+        }
+        // Expired or board now owned — clear
+        localStorage.removeItem('chainpong-processing-board');
+      }
+    } catch {}
+  }, [boards]);
 
   // Listen for purchase_confirmed / deposit_confirmed socket events
   useEffect(() => {
@@ -315,6 +369,10 @@ export default function Shop() {
   const handleConfirmPurchase = useCallback(async () => {
     if (!selectedBoard) return;
 
+    // Debounce: prevent double-click buying
+    if (purchaseLocked.current) return;
+    purchaseLocked.current = true;
+
     setBuyingBoardId(selectedBoard.id);
     let txHash: string | undefined;
 
@@ -331,6 +389,7 @@ export default function Shop() {
               setModalStatus('error');
               setModalError(`Please switch your wallet to ${CHAIN_NAME}`);
               setBuyingBoardId(null);
+              purchaseLocked.current = false;
               return;
             }
           }
@@ -348,6 +407,7 @@ export default function Shop() {
           setModalStatus('error');
           setModalError(msg.includes('User rejected') ? 'Transaction rejected by user' : msg);
           setBuyingBoardId(null);
+          purchaseLocked.current = false;
           return;
         }
       } else {
@@ -364,32 +424,60 @@ export default function Shop() {
       if (result.success) {
         setModalStatus('success');
         lastTxHashRef.current = null;
+        try { localStorage.removeItem('chainpong-processing-board'); } catch {}
       } else if (result.error === 'processing') {
-        // Money left wallet but API failed — show "Processing on Base"
         setModalStatus('processing');
+        // Persist so page refresh doesn't lose the "processing" state
+        try { localStorage.setItem('chainpong-processing-board', JSON.stringify({ boardId: selectedBoard.id, timestamp: Date.now() })); } catch {}
       } else {
         setModalStatus('error');
         setModalError(result.error || 'Purchase failed on server');
       }
     } catch (err: any) {
-      // If txHash exists, money left wallet — show processing instead of error
       if (txHash) {
         setModalStatus('processing');
+        try { localStorage.setItem('chainpong-processing-board', JSON.stringify({ boardId: selectedBoard.id, timestamp: Date.now() })); } catch {}
       } else {
         setModalStatus('error');
         setModalError(err?.message || 'Unexpected error');
       }
     } finally {
       setBuyingBoardId(null);
+      // Release debounce lock only on terminal states (success, error, user-reject)
+      // Keep locked during "processing" — user must use Sync
+      if (modalStatus !== 'processing') {
+        purchaseLocked.current = false;
+      }
     }
-  }, [selectedBoard, authMethod, sendTransactionAsync, switchChainAsync, walletChainId, buyBoard]);
+  }, [selectedBoard, authMethod, sendTransactionAsync, switchChainAsync, walletChainId, buyBoard, modalStatus]);
 
   const handleCloseModal = useCallback(() => {
     setSelectedBoard(null);
     setBuyingBoardId(null);
     setModalStatus('confirm');
     setModalError(null);
+    purchaseLocked.current = false;
+    try { localStorage.removeItem('chainpong-processing-board'); } catch {}
   }, []);
+
+  // Manual TxHash verification — user pastes a hash from BaseScan
+  const handleManualHash = useCallback(async (hash: string) => {
+    if (!hash.startsWith('0x')) return;
+    setSyncing(true);
+    try {
+      const result = await apiSyncPurchases([hash]);
+      if (result.success && result.data) {
+        const { reconciled, alreadyOwned } = result.data;
+        if (reconciled.length > 0 || alreadyOwned.length > 0) {
+          setModalStatus('success');
+          try { localStorage.removeItem('chainpong-processing-board'); } catch {}
+          await syncFromBackend();
+        }
+      }
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncFromBackend]);
 
   const filteredBoards = activeFilter === 'all'
     ? boards
@@ -491,6 +579,7 @@ export default function Shop() {
           onConfirm={handleConfirmPurchase}
           onClose={handleCloseModal}
           onSync={handleManualSync}
+          onManualHash={handleManualHash}
           authMethod={authMethod || 'email'}
         />
       )}

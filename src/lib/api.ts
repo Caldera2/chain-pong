@@ -72,12 +72,14 @@ async function request<T>(
 ): Promise<{ success: boolean; data?: T; error?: string }> {
   if (!accessToken) loadTokens();
 
-  // Pre-flight: refresh token if expiring within 60s (catches MetaMask popup delays)
+  // Pre-flight: refresh token if expiring within 5 minutes.
+  // Users often spend 2-3 minutes in the MetaMask popup; a 60s buffer
+  // causes tokens to expire before the post-tx API call lands.
   if (accessToken) {
     const exp = getTokenExpiry(accessToken);
     if (exp) {
       const nowSec = Math.floor(Date.now() / 1000);
-      if (exp - nowSec < 60 && refreshToken) {
+      if (exp - nowSec < 300 && refreshToken) {
         await tryRefresh();
       }
     }
@@ -151,7 +153,7 @@ export async function ensureValidToken(): Promise<boolean> {
   if (!exp) return !!accessToken; // Can't decode — let server reject if invalid
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const BUFFER_SEC = 60; // Refresh if within 60s of expiry
+  const BUFFER_SEC = 300; // Refresh if within 5 minutes of expiry (MetaMask popup can take minutes)
 
   if (exp - nowSec < BUFFER_SEC) {
     console.log('[AUTH] Token expiring soon, refreshing...');
@@ -346,6 +348,13 @@ export async function apiPurchaseBoard(boardId: string, txHash?: string) {
   return request<{ boardId: string; boardName: string; message: string }>('/player/boards/purchase', {
     method: 'POST',
     body: JSON.stringify({ boardId, txHash }),
+  });
+}
+
+export async function apiCreatePendingPurchase(boardId: string) {
+  return request<{ pendingTxId: string; boardId: string; boardName: string; price: number }>('/player/boards/pending', {
+    method: 'POST',
+    body: JSON.stringify({ boardId }),
   });
 }
 

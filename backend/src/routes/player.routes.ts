@@ -107,6 +107,27 @@ router.get('/boards', requireAuth, async (req: AuthRequest, res: Response, next:
 });
 
 // ─────────────────────────────────────────────────────────
+// POST /api/player/boards/pending — Pre-register purchase intent
+//
+// Called before MetaMask opens so the server knows a purchase
+// is coming. If the frontend crashes after ETH is sent, the
+// webhook can match the deposit to this pending record.
+// ─────────────────────────────────────────────────────────
+router.post('/boards/pending', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { boardId } = req.body;
+    if (!boardId) {
+      res.status(400).json({ success: false, error: 'boardId is required' });
+      return;
+    }
+    const result = await playerService.createPendingPurchase(req.user!.userId, boardId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────────────────
 // POST /api/player/boards/purchase — Buy a board
 // ─────────────────────────────────────────────────────────
 router.post('/boards/purchase', requireAuth, async (req: AuthRequest, res: Response, next: NextFunction) => {

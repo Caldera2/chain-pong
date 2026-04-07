@@ -12,12 +12,61 @@ let socket: Socket | null = null;
 // Callback for auth errors — frontend can hook into this
 let onAuthErrorCallback: (() => void) | null = null;
 
+// Exponential backoff state for auth reconnection
+let authRetryCount = 0;
+const MAX_AUTH_RETRIES = 5;
+
+// Track the last failed event so we can replay it after re-auth
+let lastFailedEvent: { name: string; data: any } | null = null;
+
 export function setOnAuthError(callback: () => void) {
   onAuthErrorCallback = callback;
 }
 
 export function getSocket(): Socket | null {
   return socket;
+}
+
+// Check if the Zustand store has a transaction in progress
+// (imported lazily to avoid circular deps)
+function isTransactionInProgress(): boolean {
+  try {
+    const stored = localStorage.getItem('chainpong-pending-txs');
+    if (stored) {
+      const txs = JSON.parse(stored);
+      if (Array.isArray(txs) && txs.length > 0) return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function handleAuthReconnect(): Promise<boolean> {
+  if (authRetryCount >= MAX_AUTH_RETRIES) {
+    console.warn(`[SOCKET] Max auth retries (${MAX_AUTH_RETRIES}) reached`);
+    // Only trigger auth error callback if no transaction is in progress
+    if (!isTransactionInProgress()) {
+      onAuthErrorCallback?.();
+    }
+    return false;
+  }
+
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+  const delay = Math.min(1000 * Math.pow(2, authRetryCount), 16_000);
+  authRetryCount++;
+  console.log(`[SOCKET] Auth retry ${authRetryCount}/${MAX_AUTH_RETRIES} in ${delay}ms...`);
+
+  await new Promise(r => setTimeout(r, delay));
+
+  const refreshed = await ensureValidToken();
+  if (refreshed) {
+    const newToken = getAccessToken();
+    if (socket && newToken) {
+      socket.auth = { token: newToken };
+      socket.connect();
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function connectSocket(): Promise<Socket> {
@@ -30,39 +79,41 @@ export async function connectSocket(): Promise<Socket> {
     throw new Error('No valid access token — must be logged in to connect');
   }
 
+  // Reset retry counter on fresh connection
+  authRetryCount = 0;
+
   socket = io(SOCKET_URL, {
     auth: { token },
     transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: 8,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 10_000,
   });
 
   socket.on('connect', () => {
-    console.log('🔌 Socket connected:', socket?.id);
+    console.log('[SOCKET] Connected:', socket?.id);
+    authRetryCount = 0; // Reset on successful connect
+
+    // Replay last failed event if we reconnected after an auth error
+    if (lastFailedEvent && socket) {
+      console.log(`[SOCKET] Replaying failed event: ${lastFailedEvent.name}`);
+      socket.emit(lastFailedEvent.name as any, lastFailedEvent.data);
+      lastFailedEvent = null;
+    }
   });
 
   socket.on('disconnect', (reason) => {
-    console.log('🔌 Socket disconnected:', reason);
+    console.log('[SOCKET] Disconnected:', reason);
   });
 
   socket.on('connect_error', async (err) => {
-    console.error('🔌 Socket connection error:', err.message);
+    console.error('[SOCKET] Connection error:', err.message);
 
-    // If auth error, try silent re-login
-    if (err.message.includes('expired') || err.message.includes('Invalid') || err.message.includes('Authentication')) {
-      console.log('[SOCKET] Auth error detected — attempting silent token refresh...');
-      const refreshed = await ensureValidToken();
-      if (refreshed) {
-        const newToken = getAccessToken();
-        if (socket && newToken) {
-          socket.auth = { token: newToken };
-          socket.connect(); // Reconnect with fresh token
-          return;
-        }
-      }
-      // Refresh failed — notify frontend to handle re-login
-      onAuthErrorCallback?.();
+    // If auth error, try silent re-auth with exponential backoff
+    if (err.message.includes('expired') || err.message.includes('Invalid') || err.message.includes('auth_error') || err.message.includes('Authentication')) {
+      console.log('[SOCKET] Auth error detected — starting backoff reconnection...');
+      await handleAuthReconnect();
     }
   });
 
@@ -78,7 +129,10 @@ export async function connectSocket(): Promise<Socket> {
         return;
       }
     }
-    onAuthErrorCallback?.();
+    // Only trigger auth error callback if no transaction is processing
+    if (!isTransactionInProgress()) {
+      onAuthErrorCallback?.();
+    }
   });
 
   return socket;
