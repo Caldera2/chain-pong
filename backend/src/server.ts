@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
 
 import { env } from './config/env';
-import { connectDatabase, disconnectDatabase } from './config/database';
+import { connectDatabase, disconnectDatabase, startKeepalive } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import { initializeSocket, getOnlineCount } from './services/socket.service';
 import { auditSecretSafety } from './middleware/security';
@@ -130,6 +130,7 @@ initializeSocket(httpServer);
 if (!process.env.VERCEL) {
   async function start() {
     await connectDatabase();
+    startKeepalive();
 
     // Run security audit on startup
     auditSecretSafety();

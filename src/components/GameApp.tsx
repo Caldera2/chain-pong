@@ -1,7 +1,8 @@
 'use client';
 
 import { useGameStore } from '@/lib/store';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { apiHealthCheck } from '@/lib/api';
 import SplashScreen from '@/components/SplashScreen';
 import Login from '@/components/Login';
 import Signup from '@/components/Signup';
@@ -24,6 +25,33 @@ import Referral from '@/components/Referral';
 export default function GameApp() {
   const screen = useGameStore((s) => s.screen);
   const [resetToken, setResetToken] = useState<string | null>(null);
+  const [serverDown, setServerDown] = useState(false);
+  const failCount = useRef(0);
+
+  // Heartbeat: check server health every 30s on auth screens.
+  // Shows a banner if the server is unreachable so users know before they try to sign up.
+  useEffect(() => {
+    if (screen !== 'login' && screen !== 'signup') {
+      setServerDown(false);
+      return;
+    }
+    let cancelled = false;
+    const check = async () => {
+      const { ok } = await apiHealthCheck();
+      if (cancelled) return;
+      if (!ok) {
+        failCount.current++;
+        // Show banner after 2 consecutive failures to avoid false positives
+        if (failCount.current >= 2) setServerDown(true);
+      } else {
+        failCount.current = 0;
+        setServerDown(false);
+      }
+    };
+    check();
+    const id = setInterval(check, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [screen]);
 
   // Check URL for reset-token and referral parameters on mount
   useEffect(() => {
@@ -54,6 +82,11 @@ export default function GameApp() {
 
   return (
     <main className="min-h-screen">
+      {serverDown && (
+        <div className="bg-destructive/90 text-white text-center text-sm py-2 px-4">
+          Server unreachable — signup and login may not work right now. Retrying...
+        </div>
+      )}
       <Navbar />
       {screen === 'splash' && <SplashScreen />}
       {screen === 'login' && <Login />}

@@ -16,13 +16,42 @@ if (env.isDev) {
 }
 
 export async function connectDatabase(): Promise<void> {
-  try {
-    await prisma.$connect();
-    console.log('✅ Database connected');
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    process.exit(1);
+  // Retry connection up to 3 times — free-tier databases (Neon, Supabase, Railway)
+  // often "sleep" after inactivity and need a wake-up attempt.
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await prisma.$connect();
+      // Warm the connection pool with a trivial query
+      await prisma.$queryRaw`SELECT 1`;
+      console.log('✅ Database connected');
+      return;
+    } catch (error) {
+      console.error(`❌ Database connection attempt ${attempt}/${MAX_RETRIES} failed:`, error);
+      if (attempt === MAX_RETRIES) {
+        console.error('❌ All database connection attempts exhausted');
+        process.exit(1);
+      }
+      // Wait before retrying (2s, 4s)
+      await new Promise(r => setTimeout(r, attempt * 2000));
+    }
   }
+}
+
+// Keepalive: ping the database every 4 minutes to prevent connection timeouts
+// on free-tier providers that kill idle connections after 5 minutes.
+let keepaliveInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startKeepalive(): void {
+  if (keepaliveInterval) return;
+  keepaliveInterval = setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch (err) {
+      console.warn('[DB] Keepalive ping failed — reconnecting:', (err as Error).message);
+      try { await prisma.$connect(); } catch {}
+    }
+  }, 4 * 60 * 1000);
 }
 
 export async function disconnectDatabase(): Promise<void> {

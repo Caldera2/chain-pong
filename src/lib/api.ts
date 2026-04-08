@@ -2,7 +2,10 @@
 // Chain Pong — Frontend API Client
 // ─────────────────────────────────────────────────────────
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://chain-pong-api.vercel.app/api';
+// API base URL — strip any trailing slash to prevent double-slash in URLs.
+// Falls back to localhost for development if NEXT_PUBLIC_API_URL is not set.
+const RAW_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+const API_BASE = RAW_URL.replace(/\/+$/, '');
 
 // ─── Token Management ───────────────────────────────────
 
@@ -281,6 +284,21 @@ export async function apiLogout() {
   return res;
 }
 
+// ─── Health Check ───────────────────────────────────────
+
+export async function apiHealthCheck(): Promise<{ ok: boolean; latencyMs: number }> {
+  const start = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+    clearTimeout(timeout);
+    return { ok: res.ok, latencyMs: Date.now() - start };
+  } catch {
+    return { ok: false, latencyMs: Date.now() - start };
+  }
+}
+
 // ─── Player API ─────────────────────────────────────────
 
 export interface PlayerProfile {
@@ -548,8 +566,3 @@ export async function apiGetFullBalance() {
   return request<{ gameBalance: string; onChainBalance: string }>('/player/full-balance');
 }
 
-// ─── Health Check ───────────────────────────────────────
-
-export async function apiHealthCheck() {
-  return request<{ status: string; version: string; onlinePlayers: number }>('/health');
-}

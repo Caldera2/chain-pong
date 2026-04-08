@@ -120,14 +120,19 @@ export interface GeneratedWallet {
 }
 
 export function generateGameWallet(): GeneratedWallet {
+  const start = Date.now();
+  console.log('[WALLET] Generating new HD wallet...');
+
   // Create a real random HD wallet (same as MetaMask "Create Wallet")
   const wallet = ethers.Wallet.createRandom();
 
   if (!wallet.mnemonic) {
+    console.error('[WALLET] createRandom() returned wallet without mnemonic');
     throw new Error('Failed to generate mnemonic');
   }
 
   const encryptedKey = encryptPrivateKey(wallet.privateKey);
+  console.log(`[WALLET] Generated ${wallet.address} in ${Date.now() - start}ms`);
 
   return {
     address: wallet.address,

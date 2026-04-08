@@ -27,7 +27,7 @@ import { ESCROW_ABI } from './escrowAbi';
 import { ACTIVE_CHAIN } from '../wagmi';
 
 const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000') as `0x${string}`;
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api').replace(/\/+$/, '').replace(/\/api$/, '');
 
 export const isContractDeployed = CONTRACT_ADDRESS !== '0x0000000000000000000000000000000000000000';
 
