@@ -28,29 +28,35 @@ export default function GameApp() {
   const [serverDown, setServerDown] = useState(false);
   const failCount = useRef(0);
 
-  // Heartbeat: check server health every 30s on auth screens.
-  // Shows a banner if the server is unreachable so users know before they try to sign up.
+  // Heartbeat with exponential backoff on auth screens.
+  // Shows banner only after 3 consecutive failures to avoid flicker.
+  // Backs off: 10s → 20s → 40s (max 60s). Resets on success.
   useEffect(() => {
     if (screen !== 'login' && screen !== 'signup') {
       setServerDown(false);
       return;
     }
     let cancelled = false;
+    let delay = 10_000;
+    let timer: ReturnType<typeof setTimeout>;
+
     const check = async () => {
       const { ok } = await apiHealthCheck();
       if (cancelled) return;
       if (!ok) {
         failCount.current++;
-        // Show banner after 2 consecutive failures to avoid false positives
-        if (failCount.current >= 2) setServerDown(true);
+        if (failCount.current >= 3) setServerDown(true);
+        // Exponential backoff: 10s → 20s → 40s → 60s max
+        delay = Math.min(delay * 2, 60_000);
       } else {
         failCount.current = 0;
+        delay = 10_000;
         setServerDown(false);
       }
+      timer = setTimeout(check, delay);
     };
     check();
-    const id = setInterval(check, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [screen]);
 
   // Check URL for reset-token and referral parameters on mount

@@ -4,8 +4,16 @@
 
 // API base URL — strip any trailing slash to prevent double-slash in URLs.
 // Falls back to localhost for development if NEXT_PUBLIC_API_URL is not set.
+// Protocol enforcement: if page is served over HTTPS, force HTTPS for API too
+// to prevent mixed-content blocks in browsers.
 const RAW_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
-const API_BASE = RAW_URL.replace(/\/+$/, '');
+const API_BASE = (() => {
+  let url = RAW_URL.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    url = url.replace(/^http:\/\//, 'https://');
+  }
+  return url;
+})();
 
 // ─── Token Management ───────────────────────────────────
 

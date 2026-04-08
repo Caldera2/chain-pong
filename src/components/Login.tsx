@@ -16,6 +16,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [walletConnecting, setWalletConnecting] = useState(false);
 
   const [seedPhrase, setSeedPhrase] = useState('');
   const [seedCopied, setSeedCopied] = useState(false);
@@ -232,10 +233,20 @@ export default function Login() {
                   variant="outline"
                   size="lg"
                   className="w-full"
-                  onClick={() => { markWalletIntent(); openConnectModal(); }}
+                  disabled={walletConnecting}
+                  onClick={() => {
+                    setWalletConnecting(true);
+                    markWalletIntent();
+                    openConnectModal();
+                    // Reset after 30s in case user closes modal without connecting
+                    setTimeout(() => setWalletConnecting(false), 30_000);
+                  }}
                 >
-                  <Wallet className="w-4 h-4" />
-                  Continue with Wallet
+                  {walletConnecting ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</>
+                  ) : (
+                    <><Wallet className="w-4 h-4" /> Continue with Wallet</>
+                  )}
                 </Button>
               )
             )}

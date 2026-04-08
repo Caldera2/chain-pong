@@ -31,7 +31,8 @@ function consumeWalletIntent(): boolean {
 
 function WalletSync() {
   const { address, isConnected, chainId: walletChainId } = useAccount();
-  const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id, query: { refetchInterval: 10000 } });
+  // Lazy: only fetch balance when wallet is actually connected to avoid blocking RPC calls
+  const { data: balanceData } = useBalance({ address, chainId: ACTIVE_CHAIN.id, query: { enabled: !!address && isConnected, refetchInterval: 10_000 } });
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();

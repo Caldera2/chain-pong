@@ -5,7 +5,15 @@
 import { io, Socket } from 'socket.io-client';
 import { getAccessToken, ensureValidToken } from './api';
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4000';
+// Socket URL — enforce wss:// when page is served over https:// to avoid mixed-content blocks.
+const RAW_SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/?$/, '') || 'http://localhost:4000';
+const SOCKET_URL = (() => {
+  let url = RAW_SOCKET_URL.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    url = url.replace(/^http:\/\//, 'https://');
+  }
+  return url;
+})();
 
 let socket: Socket | null = null;
 

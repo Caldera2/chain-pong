@@ -43,6 +43,7 @@ export default function Signup() {
   const [selectedAvatar, setSelectedAvatar] = useState('🏓');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [walletConnecting, setWalletConnecting] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState('Creating...');
   const walletTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -229,9 +230,24 @@ export default function Signup() {
             <ConnectButton.Custom>
               {({ openConnectModal, mounted }) => (
                 mounted && (
-                  <Button type="button" variant="outline" size="lg" className="w-full" onClick={() => { markWalletIntent(); openConnectModal(); }}>
-                    <Wallet className="w-4 h-4" />
-                    Continue with Wallet
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    className="w-full"
+                    disabled={walletConnecting}
+                    onClick={() => {
+                      setWalletConnecting(true);
+                      markWalletIntent();
+                      openConnectModal();
+                      setTimeout(() => setWalletConnecting(false), 30_000);
+                    }}
+                  >
+                    {walletConnecting ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</>
+                    ) : (
+                      <><Wallet className="w-4 h-4" /> Continue with Wallet</>
+                    )}
                   </Button>
                 )
               )}
