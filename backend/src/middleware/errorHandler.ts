@@ -38,6 +38,14 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
       });
       return;
     }
+    if (prismaErr.code === 'P2003') {
+      console.error('Foreign key constraint failed:', prismaErr.meta);
+      res.status(400).json({
+        success: false,
+        error: 'Required game data is missing. Please contact support or try again later.',
+      });
+      return;
+    }
   }
 
   // Unknown errors

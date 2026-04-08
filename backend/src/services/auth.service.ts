@@ -55,6 +55,9 @@ export async function signupWithEmail(email: string, username: string, password:
   // If any step fails, the entire operation rolls back cleanly
   let user;
   try {
+    // Check if 'classic' board exists before referencing it (seed may not have run)
+    const classicBoard = await prisma.board.findUnique({ where: { id: 'classic' } });
+
     user = await prisma.user.create({
       data: {
         email,
@@ -64,9 +67,7 @@ export async function signupWithEmail(email: string, username: string, password:
         gameWallet: wallet.address,
         encryptedKey: wallet.encryptedKey,
         stats: { create: {} },
-        ownedBoards: {
-          create: { boardId: 'classic' },
-        },
+        ...(classicBoard ? { ownedBoards: { create: { boardId: 'classic' } } } : {}),
       },
       include: { stats: true },
     });
@@ -87,6 +88,11 @@ export async function signupWithEmail(email: string, username: string, password:
         throw new BadRequestError('Account creation failed — please try again');
       }
       throw new ConflictError('Account already exists');
+    }
+    // P2003 = foreign key constraint violation (e.g. missing board seed data)
+    if (err.code === 'P2003') {
+      console.error('[SIGNUP] Foreign key violation — database may need seeding:', err.meta);
+      throw new BadRequestError('Account creation failed — game data is being set up. Please try again shortly.');
     }
     console.error('[SIGNUP] User creation failed:', err.message, err.stack);
     throw new BadRequestError('Account creation failed — please try again');
@@ -194,13 +200,15 @@ export async function authWithWallet(walletAddress: string, signature: string, m
       if (nameExists) throw new ConflictError('Username already taken');
     }
 
+    const classicBoardExists = await prisma.board.findUnique({ where: { id: 'classic' } });
+
     user = await prisma.user.create({
       data: {
         username: displayName,
         authMethod: 'WALLET',
         walletAddress: normalized,
         stats: { create: {} },
-        ownedBoards: { create: { boardId: 'classic' } },
+        ...(classicBoardExists ? { ownedBoards: { create: { boardId: 'classic' } } } : {}),
       },
       include: { stats: true },
     });
