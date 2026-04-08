@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
 import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { markWalletIntent } from '@/components/Providers';
 import { apiLogin } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -231,7 +232,7 @@ export default function Login() {
                   variant="outline"
                   size="lg"
                   className="w-full"
-                  onClick={openConnectModal}
+                  onClick={() => { markWalletIntent(); openConnectModal(); }}
                 >
                   <Wallet className="w-4 h-4" />
                   Continue with Wallet

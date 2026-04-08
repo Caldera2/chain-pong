@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useGameStore } from '@/lib/store';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { markWalletIntent } from '@/components/Providers';
 import { apiSignup } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -228,7 +229,7 @@ export default function Signup() {
             <ConnectButton.Custom>
               {({ openConnectModal, mounted }) => (
                 mounted && (
-                  <Button type="button" variant="outline" size="lg" className="w-full" onClick={openConnectModal}>
+                  <Button type="button" variant="outline" size="lg" className="w-full" onClick={() => { markWalletIntent(); openConnectModal(); }}>
                     <Wallet className="w-4 h-4" />
                     Continue with Wallet
                   </Button>

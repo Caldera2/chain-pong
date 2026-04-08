@@ -2,6 +2,7 @@
 
 import { useGameStore } from '@/lib/store';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { markWalletIntent } from '@/components/Providers';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState } from 'react';
 import { IS_TESTNET, TOKEN_SYMBOL } from '@/lib/wagmi';
@@ -100,7 +101,7 @@ export default function Navbar() {
                 const connected = mounted && account && chain;
                 return (
                   <button
-                    onClick={connected ? openAccountModal : openConnectModal}
+                    onClick={connected ? openAccountModal : () => { markWalletIntent(); openConnectModal(); }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                       connected
                         ? 'border border-border text-foreground hover:bg-white/[0.04]'

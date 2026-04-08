@@ -3,6 +3,7 @@
 import { useGameStore } from '@/lib/store';
 import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { markWalletIntent } from '@/components/Providers';
 import { CHAIN_NAME, IS_TESTNET } from '@/lib/wagmi';
 import { apiUpdateProfile, apiExportKey } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -169,7 +170,7 @@ export default function Profile() {
             ) : (
               <ConnectButton.Custom>
                 {({ openConnectModal, mounted }) => (
-                  mounted && <Button className="w-full" onClick={openConnectModal}><Wallet className="w-4 h-4" /> Connect Wallet</Button>
+                  mounted && <Button className="w-full" onClick={() => { markWalletIntent(); openConnectModal(); }}><Wallet className="w-4 h-4" /> Connect Wallet</Button>
                 )}
               </ConnectButton.Custom>
             )}
